@@ -23,6 +23,8 @@ var (
 	info          [5]announceInfo
 )
 
+const cfgFile string = "cfg.txt"
+
 //https://twitter.com/search?q=from%3Apaintbrushpuke%20url%3Atwitch.tv%2Fpaintbrushpuke&src=typd
 func main() {
 	loadConfig()
@@ -34,10 +36,6 @@ func main() {
 	botID = user.ID
 	discord.AddHandler(commandHandler)
 	discord.AddHandler(func(discord *discordgo.Session, ready *discordgo.Ready) {
-		err = discord.UpdateStatus(0, "A friendly helpful bot!")
-		if err != nil {
-			fmt.Println("Error attempting to set my status")
-		}
 		servers := discord.State.Guilds
 		fmt.Printf("PaintBot has started on %d servers\n", len(servers))
 	})
@@ -47,9 +45,8 @@ func main() {
 	defer discord.Close()
 
 	commandPrefix = "+"
-	log.Println(info[0].twitchName)
 
-	//<-make(chan struct{})
+	<-make(chan struct{})
 
 }
 
@@ -67,17 +64,58 @@ func commandHandler(discord *discordgo.Session, message *discordgo.MessageCreate
 		return
 	}
 
-	if message.Content == "+test" {
-		content := "This is a test"
+	m := strings.Split(message.Content, " ")
+
+	if m[0] == "+test" {
+		content := "<@!" + message.Author.ID + ">"
 		discord.ChannelMessageSend(message.ChannelID, content)
 	}
 
+	if m[0] == "+config" {
+		a := announceInfo{
+			guildID:     message.GuildID,
+			channelID:   message.ChannelID,
+			twitterName: m[1],
+			twitchName:  m[2],
+		}
+		writeConfig(a)
+		content := "Wrote info to config"
+		discord.ChannelMessageSend(message.ChannelID, content)
+		discord.ChannelMessageDelete(message.ChannelID, message.ID)
+	}
+}
+
+func writeConfig(cfg announceInfo) {
+	var file *os.File
+	fileInfo, err := os.Stat(cfgFile)
+	if err != nil {
+		if os.IsNotExist(err) {
+			file, err = os.Create(cfgFile)
+			if err != nil {
+				log.Fatal(err)
+			}
+			log.Println("Created new cfg file. Info:")
+			log.Println(fileInfo)
+		}
+	} else {
+		file, err = os.Open(cfgFile)
+		if err != nil {
+			log.Fatal(err)
+		}
+	}
+	defer file.Close()
+
+	bytesWritten, err := file.WriteString(cfg.guildID + " " + cfg.channelID + " " + cfg.twitterName + " " + cfg.twitchName + "\n")
+	log.Printf("Wrote %d bytes to config\n", bytesWritten)
+
+	file.Sync()
 }
 
 func loadConfig() {
-	file, err := os.Open("cfg.txt")
+	file, err := os.Open(cfgFile)
 	if err != nil {
-		log.Fatal(err)
+		log.Println(err)
+		return
 	}
 	defer file.Close()
 
