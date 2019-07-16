@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"fmt"
+	"io/ioutil"
 	"log"
 	"os"
 	"strings"
@@ -21,14 +22,19 @@ var (
 	commandPrefix string
 	botID         string
 	info          [5]announceInfo
+	botToken      string
+	twitterToken  string
 )
 
 const cfgFile string = "cfg.txt"
+const secretsFile string = "secrets.txt"
 
 //https://twitter.com/search?q=from%3Apaintbrushpuke%20url%3Atwitch.tv%2Fpaintbrushpuke&src=typd
 func main() {
+	getSecrets()
 	loadConfig()
-	discord, err := discordgo.New("Bot NTk4MzE4OTgzNDg1MzI1MzQy.XSU6iQ.mwhNPfPAK7bZWaOwyX_NXpRyEMc")
+
+	discord, err := discordgo.New("Bot " + botToken)
 	errCheck("error creating discord session", err)
 	user, err := discord.User("@me")
 	errCheck("error retrieving account", err)
@@ -55,6 +61,16 @@ func errCheck(msg string, err error) {
 		fmt.Printf("%s: %+v", msg, err)
 		panic(err)
 	}
+}
+
+func getSecrets() {
+	data, err := ioutil.ReadFile(secretsFile)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	s := strings.Split(string(data), "\n")
+	botToken = s[0]
 }
 
 func commandHandler(discord *discordgo.Session, message *discordgo.MessageCreate) {
