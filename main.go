@@ -16,10 +16,11 @@ import (
 )
 
 type announceInfo struct {
-	guildID     string
-	channelID   string
-	twitterName string
-	twitchName  string
+	guildID       string
+	channelID     string
+	twitterName   string
+	twitchName    string
+	previousTweet int64
 }
 
 var (
@@ -95,8 +96,13 @@ func commandHandler(discord *discordgo.Session, message *discordgo.MessageCreate
 
 	m := strings.Split(message.Content, " ")
 
-	if m[0] == "+test" {
-		content := "<@!" + message.Author.ID + ">"
+	if m[0] == "+repo" {
+		content := "https://github.com/jcav2011/PaintBot"
+		discord.ChannelMessageSend(message.ChannelID, content)
+	}
+
+	if m[0] == "+invite" {
+		content := "https://discordapp.com/api/oauth2/authorize?client_id=598318983485325342&permissions=11264&scope=bot"
 		discord.ChannelMessageSend(message.ChannelID, content)
 	}
 
@@ -194,14 +200,25 @@ func setupTwitter() {
 func searchForTweets(discord *discordgo.Session) {
 	for {
 		q := "from:" + info[0].twitterName + " url:twitch.tv/" + info[0].twitchName
-		fmt.Println(q)
-		search, resp, err := twitterClient.Search.Tweets(&twitter.SearchTweetParams{
-			Query: q,
-		})
-		if err != nil {
-			log.Println(err)
-		} else if resp.StatusCode == 200 {
-			discord.ChannelMessageSend(info[0].channelID, search.Statuses[0].Text)
+		if info[0].previousTweet == 0 {
+			search, resp, err := twitterClient.Search.Tweets(&twitter.SearchTweetParams{
+				Query: q,
+			})
+			if err != nil {
+				log.Println(err)
+			} else if resp.StatusCode == 200 {
+				info[0].previousTweet = search.Statuses[0].ID
+			}
+		} else {
+			search, resp, err := twitterClient.Search.Tweets(&twitter.SearchTweetParams{
+				Query: q + "since_id:" + string(info[0].previousTweet),
+			})
+			if err != nil {
+				log.Println(err)
+			} else if resp.StatusCode == 200 && search.Statuses == nil {
+				content := "@here " + search.Statuses[0].Text
+				discord.ChannelMessageSend(info[0].channelID, content)
+			}
 		}
 		time.Sleep(5 * time.Minute)
 	}
