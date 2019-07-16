@@ -7,8 +7,12 @@ import (
 	"log"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/bwmarrin/discordgo"
+	"github.com/dghubble/go-twitter/twitter"
+	"golang.org/x/oauth2"
+	"golang.org/x/oauth2/clientcredentials"
 )
 
 type announceInfo struct {
@@ -23,7 +27,9 @@ var (
 	botID         string
 	info          [5]announceInfo
 	botToken      string
-	twitterToken  string
+	twitterKey    string
+	twitterSecret string
+	twitterClient *twitter.Client
 )
 
 const cfgFile string = "cfg.txt"
@@ -33,9 +39,12 @@ const secretsFile string = "secrets.txt"
 func main() {
 	getSecrets()
 	loadConfig()
+	setupTwitter()
 
+	log.Println("Starting bot...")
 	discord, err := discordgo.New("Bot " + botToken)
 	errCheck("error creating discord session", err)
+	log.Println("New session created...")
 	user, err := discord.User("@me")
 	errCheck("error retrieving account", err)
 
@@ -51,6 +60,8 @@ func main() {
 	defer discord.Close()
 
 	commandPrefix = "+"
+
+	go searchForTweets(discord)
 
 	<-make(chan struct{})
 
@@ -69,8 +80,10 @@ func getSecrets() {
 		log.Fatal(err)
 	}
 
-	s := strings.Split(string(data), "\n")
+	s := strings.Split(string(data), "\r\n")
 	botToken = s[0]
+	twitterKey = s[1]
+	twitterSecret = s[2]
 }
 
 func commandHandler(discord *discordgo.Session, message *discordgo.MessageCreate) {
@@ -162,5 +175,34 @@ func loadConfig() {
 		}
 		info[i] = a
 
+	}
+}
+
+func setupTwitter() {
+	config := &clientcredentials.Config{
+		ClientID:     twitterKey,
+		ClientSecret: twitterSecret,
+		TokenURL:     "https://api.twitter.com/oauth2/token",
+	}
+	// http.Client will automatically authorize Requests
+	httpClient := config.Client(oauth2.NoContext)
+
+	// Twitter client
+	twitterClient = twitter.NewClient(httpClient)
+}
+
+func searchForTweets(discord *discordgo.Session) {
+	for {
+		q := "from:" + info[0].twitterName + " url:twitch.tv/" + info[0].twitchName
+		fmt.Println(q)
+		search, resp, err := twitterClient.Search.Tweets(&twitter.SearchTweetParams{
+			Query: q,
+		})
+		if err != nil {
+			log.Println(err)
+		} else if resp.StatusCode == 200 {
+			discord.ChannelMessageSend(info[0].channelID, search.Statuses[0].Text)
+		}
+		time.Sleep(5 * time.Minute)
 	}
 }
