@@ -2,45 +2,81 @@ package main
 
 import (
 	"bufio"
+	"bytes"
+	"context"
+	"encoding/json"
 	"fmt"
 	"io/ioutil"
 	"log"
+	"net/http"
 	"os"
 	"strings"
-	"time"
+
+	"golang.org/x/oauth2"
 
 	"github.com/bwmarrin/discordgo"
-	"github.com/dghubble/go-twitter/twitter"
-	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/clientcredentials"
+	"golang.org/x/oauth2/twitch"
 )
 
 type announceInfo struct {
-	guildID       string
-	channelID     string
-	twitterName   string
-	twitchName    string
-	previousTweet int64
+	guildID    string
+	channelID  string
+	twitchName string
+}
+
+type hub struct {
+	Callback     string `json:"callback"`
+	Mode         string `json:"mode"`
+	Topic        string `json:"topic"`
+	LeaseSeconds int    `json:"lease_seconds"`
+	Secret       string `json:"secret"`
+	Challenge    string `json:"challenge"`
+}
+
+type twitchUser struct {
+	Id              string `json:"id"`
+	Login           string `json:"login"`
+	DisplayName     string `json:"display_name"`
+	UserType        string `json:"type"`
+	BroadcasterType string `json:"broadcaster_type"`
+	Description     string `json:"description"`
+	ProfileImage    string `json:"profile_image_url"`
+	OfflineImage    string `json:"offline_image_url"`
+	ViewCount       int    `json:"view_count"`
+	Email           string `json:"email"`
+}
+
+type twitchGame struct {
+	Id     string `json:"id"`
+	Name   string `json:"name"`
+	BoxArt string `json:"box_art_url"`
 }
 
 var (
-	commandPrefix string
-	botID         string
-	info          [5]announceInfo
-	botToken      string
-	twitterKey    string
-	twitterSecret string
-	twitterClient *twitter.Client
+	commandPrefix      string
+	botID              string
+	info               [5]announceInfo
+	botToken           string
+	twitchClientID     string
+	twitchClientSecret string
+	twitchToken        *oauth2.Token
+	oauth2Config       *clientcredentials.Config
+	discord            *discordgo.Session
 )
 
 const cfgFile string = "cfg.txt"
 const secretsFile string = "secrets.txt"
 
-//https://twitter.com/search?q=from%3Apaintbrushpuke%20url%3Atwitch.tv%2Fpaintbrushpuke&src=typd
 func main() {
 	getSecrets()
 	loadConfig()
-	setupTwitter()
+	generateToken()
+
+	client := &http.Client{}
+
+	go startListen()
+	registerWebhook(client)
 
 	log.Println("Starting bot...")
 	discord, err := discordgo.New("Bot " + botToken)
@@ -53,7 +89,7 @@ func main() {
 	discord.AddHandler(commandHandler)
 	discord.AddHandler(func(discord *discordgo.Session, ready *discordgo.Ready) {
 		servers := discord.State.Guilds
-		fmt.Printf("PaintBot has started on %d servers\n", len(servers))
+		log.Printf("PaintBot has started on %d servers\n", len(servers))
 	})
 
 	err = discord.Open()
@@ -61,8 +97,6 @@ func main() {
 	defer discord.Close()
 
 	commandPrefix = "+"
-
-	go searchForTweets(discord)
 
 	<-make(chan struct{})
 
@@ -83,8 +117,8 @@ func getSecrets() {
 
 	s := strings.Split(string(data), "\r\n")
 	botToken = s[0]
-	twitterKey = s[1]
-	twitterSecret = s[2]
+	twitchClientID = s[1]
+	twitchClientSecret = s[2]
 }
 
 func commandHandler(discord *discordgo.Session, message *discordgo.MessageCreate) {
@@ -106,14 +140,19 @@ func commandHandler(discord *discordgo.Session, message *discordgo.MessageCreate
 		discord.ChannelMessageSend(message.ChannelID, content)
 	}
 
+	if m[0] == "+loadConfig" {
+		loadConfig()
+		discord.ChannelMessageDelete(message.ChannelID, message.ID)
+	}
+
 	if m[0] == "+config" {
 		a := announceInfo{
-			guildID:     message.GuildID,
-			channelID:   message.ChannelID,
-			twitterName: m[1],
-			twitchName:  m[2],
+			guildID:    message.GuildID,
+			channelID:  message.ChannelID,
+			twitchName: m[1],
 		}
 		writeConfig(a)
+		loadConfig()
 		content := "Wrote info to config"
 		discord.ChannelMessageSend(message.ChannelID, content)
 		discord.ChannelMessageDelete(message.ChannelID, message.ID)
@@ -121,27 +160,17 @@ func commandHandler(discord *discordgo.Session, message *discordgo.MessageCreate
 }
 
 func writeConfig(cfg announceInfo) {
-	var file *os.File
-	fileInfo, err := os.Stat(cfgFile)
+	file, err := os.OpenFile(cfgFile, os.O_APPEND|os.O_CREATE, 0666)
 	if err != nil {
-		if os.IsNotExist(err) {
-			file, err = os.Create(cfgFile)
-			if err != nil {
-				log.Fatal(err)
-			}
-			log.Println("Created new cfg file. Info:")
-			log.Println(fileInfo)
-		}
-	} else {
-		file, err = os.Open(cfgFile)
-		if err != nil {
-			log.Fatal(err)
-		}
+		log.Fatal(err)
 	}
 	defer file.Close()
 
-	bytesWritten, err := file.WriteString(cfg.guildID + " " + cfg.channelID + " " + cfg.twitterName + " " + cfg.twitchName + "\n")
-	log.Printf("Wrote %d bytes to config\n", bytesWritten)
+	bytesWritten, err := file.WriteString(cfg.guildID + " " + cfg.channelID + " " + cfg.twitchName + "\n")
+	if err != nil {
+		log.Println(err)
+	}
+	log.Println("Wrote " + string(bytesWritten) + " bytes to config ")
 
 	file.Sync()
 }
@@ -174,52 +203,136 @@ func loadConfig() {
 		//fmt.Println("First word found:", scanner.Text())
 		s := strings.Split(scanner.Text(), " ")
 		a := announceInfo{
-			guildID:     s[0],
-			channelID:   s[1],
-			twitterName: s[2],
-			twitchName:  s[3],
+			guildID:    s[0],
+			channelID:  s[1],
+			twitchName: s[2],
 		}
 		info[i] = a
 
 	}
 }
 
-func setupTwitter() {
-	config := &clientcredentials.Config{
-		ClientID:     twitterKey,
-		ClientSecret: twitterSecret,
-		TokenURL:     "https://api.twitter.com/oauth2/token",
+func generateToken() {
+	oauth2Config = &clientcredentials.Config{
+		ClientID:     twitchClientID,
+		ClientSecret: twitchClientSecret,
+		TokenURL:     twitch.Endpoint.TokenURL,
 	}
-	// http.Client will automatically authorize Requests
-	httpClient := config.Client(oauth2.NoContext)
 
-	// Twitter client
-	twitterClient = twitter.NewClient(httpClient)
+	token, err := oauth2Config.Token(context.Background())
+	if err != nil {
+		log.Fatal(err)
+	}
+	twitchToken = token
 }
 
-func searchForTweets(discord *discordgo.Session) {
-	for {
-		q := "from:" + info[0].twitterName + " url:twitch.tv/" + info[0].twitchName
-		if info[0].previousTweet == 0 {
-			search, resp, err := twitterClient.Search.Tweets(&twitter.SearchTweetParams{
-				Query: q,
-			})
-			if err != nil {
-				log.Println(err)
-			} else if resp.StatusCode == 200 {
-				info[0].previousTweet = search.Statuses[0].ID
-			}
-		} else {
-			search, resp, err := twitterClient.Search.Tweets(&twitter.SearchTweetParams{
-				Query: q + "since_id:" + string(info[0].previousTweet),
-			})
-			if err != nil {
-				log.Println(err)
-			} else if resp.StatusCode == 200 && search.Statuses == nil {
-				content := "@here " + search.Statuses[0].Text
-				discord.ChannelMessageSend(info[0].channelID, content)
-			}
-		}
-		time.Sleep(5 * time.Minute)
+func validateToken(client *http.Client) {
+	req, err := http.NewRequest("GET", "https://id.twitch.tv/oauth2/validate", nil)
+	req.Header.Add("Client-ID", twitchClientID)
+	req.Header.Add("Authorization", "Bearer "+twitchToken.AccessToken)
+
+	resp, err := client.Do(req)
+	if err != nil {
+		panic(err)
 	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 200 && resp.StatusCode <= 299 {
+		return
+	} else {
+		generateToken()
+	}
+}
+
+func handleNotification(w http.ResponseWriter, r *http.Request) {
+	body, err := ioutil.ReadAll(r.Body)
+	if err != nil {
+		panic(err)
+	}
+	log.Printf("Request body received: %s", string(body))
+}
+
+func registerWebhook(client *http.Client) {
+	userid := getTwitchUser("paintbrushpuke", client).Id
+	hub := &hub{
+		Callback:     "ec2-3-134-113-251.us-east-2.compute.amazonaws.com:8080/notify",
+		Mode:         "subscribe",
+		Topic:        "https://api.twitch.tv/helix/streams?user_id=" + userid,
+		LeaseSeconds: 864000,
+	}
+	body, _ := json.Marshal(hub)
+
+	req, err := http.NewRequest("POST", "https://api.twitch.tv/helix/webhooks/hub", bytes.NewBuffer(body))
+	req.Header.Add("Client-ID", twitchClientID)
+	req.Header.Add("Authorization", "Bearer "+twitchToken.AccessToken)
+
+	validateToken(client)
+	resp, err := client.Do(req)
+	if err != nil {
+
+	}
+	defer resp.Body.Close()
+}
+
+func startListen() {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/notify", handleNotification)
+
+	err := http.ListenAndServe(":8080", mux)
+	log.Fatal(err)
+}
+
+func getTwitchUser(username string, client *http.Client) twitchUser {
+	var u twitchUser
+
+	req, err := http.NewRequest("GET", "https://api.twitch.tv/helix/users?login="+username, nil)
+	req.Header.Add("Client-ID", twitchClientID)
+	req.Header.Add("Authorization", "Bearer "+twitchToken.AccessToken)
+
+	validateToken(client)
+	resp, err := client.Do(req)
+	if err != nil {
+		panic(err)
+	}
+	defer resp.Body.Close()
+
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		panic(err)
+	}
+
+	err = json.Unmarshal(body, &u)
+
+	if err != nil {
+		panic(err)
+	}
+
+	return u
+}
+
+func getGame(id string, client *http.Client) twitchGame {
+	var g twitchGame
+
+	req, err := http.NewRequest("GET", "https://api.twitch.tv/helix/games?id="+id, nil)
+	req.Header.Add("Client-ID", twitchClientID)
+	req.Header.Add("Authorization", "Bearer "+twitchToken.AccessToken)
+
+	validateToken(client)
+	resp, err := client.Do(req)
+	if err != nil {
+		panic(err)
+	}
+	defer resp.Body.Close()
+
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		panic(err)
+	}
+
+	err = json.Unmarshal(body, &g)
+
+	if err != nil {
+		panic(err)
+	}
+
+	return g
 }
