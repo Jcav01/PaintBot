@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"fmt"
 	"io/ioutil"
 	"log"
 	"net/http"
@@ -26,12 +25,12 @@ type announceInfo struct {
 }
 
 type hub struct {
-	Callback     string `json:"callback"`
-	Mode         string `json:"mode"`
-	Topic        string `json:"topic"`
-	LeaseSeconds int    `json:"lease_seconds"`
-	Secret       string `json:"secret"`
-	Challenge    string `json:"challenge"`
+	Callback     string `json:"hub.callback"`
+	Mode         string `json:"hub.mode"`
+	Topic        string `json:"hub.topic"`
+	LeaseSeconds int    `json:"hub.lease_seconds"`
+	Secret       string `json:"hub.secret"`
+	Challenge    string `json:"hub.challenge"`
 }
 
 type twitchUser struct {
@@ -46,11 +45,33 @@ type twitchUser struct {
 	ViewCount       int    `json:"view_count"`
 	Email           string `json:"email"`
 }
+type twitchUserJson struct {
+	Users []twitchUser `json:"data"`
+}
+
+type twitchStream struct {
+	Id          string `json:"id"`
+	UserID      string `json:"user_id"`
+	UserName    string `json:"user_name"`
+	GameID      string `json:"game_id"`
+	Type        string `json:"type"`
+	Title       string `json:"title"`
+	ViewerCount int    `json:"viewer_count"`
+	StartedAt   string `json:"started_at"`
+	Language    string `json:"language"`
+	Thumbnail   string `json:"thumbnail_url"`
+}
+type twitchStreamJson struct {
+	Streams []twitchStream `json:"data"`
+}
 
 type twitchGame struct {
 	Id     string `json:"id"`
 	Name   string `json:"name"`
 	BoxArt string `json:"box_art_url"`
+}
+type twitchGameJson struct {
+	Games []twitchGame `json:"data"`
 }
 
 var (
@@ -63,6 +84,8 @@ var (
 	twitchToken        *oauth2.Token
 	oauth2Config       *clientcredentials.Config
 	discord            *discordgo.Session
+	client             *http.Client
+	channelMap         map[string]string
 )
 
 const cfgFile string = "cfg.txt"
@@ -73,10 +96,11 @@ func main() {
 	loadConfig()
 	generateToken()
 
-	client := &http.Client{}
+	client = &http.Client{}
 
 	go startListen()
-	registerWebhook(client)
+	registerWebhook(client, "unsubscribe")
+	registerWebhook(client, "subscribe")
 
 	log.Println("Starting bot...")
 	discord, err := discordgo.New("Bot " + botToken)
@@ -104,7 +128,7 @@ func main() {
 
 func errCheck(msg string, err error) {
 	if err != nil {
-		fmt.Printf("%s: %+v", msg, err)
+		log.Printf("%s: %+v", msg, err)
 		panic(err)
 	}
 }
@@ -131,7 +155,7 @@ func commandHandler(discord *discordgo.Session, message *discordgo.MessageCreate
 	m := strings.Split(message.Content, " ")
 
 	if m[0] == "+repo" {
-		content := "https://github.com/jcav2011/PaintBot"
+		content := "https://github.com/jcav01/PaintBot"
 		discord.ChannelMessageSend(message.ChannelID, content)
 	}
 
@@ -183,9 +207,9 @@ func loadConfig() {
 	}
 	defer file.Close()
 
+	channelMap = make(map[string]string)
 	scanner := bufio.NewScanner(file)
 	for {
-		i := 0
 		success := scanner.Scan()
 		if success == false {
 			// False on error or EOF. Check error
@@ -202,12 +226,7 @@ func loadConfig() {
 		// Get data from scan with Bytes() or Text()
 		//fmt.Println("First word found:", scanner.Text())
 		s := strings.Split(scanner.Text(), " ")
-		a := announceInfo{
-			guildID:    s[0],
-			channelID:  s[1],
-			twitchName: s[2],
-		}
-		info[i] = a
+		channelMap[s[0]] = s[1]
 
 	}
 }
@@ -226,7 +245,7 @@ func generateToken() {
 	twitchToken = token
 }
 
-func validateToken(client *http.Client) {
+func validateToken() {
 	req, err := http.NewRequest("GET", "https://id.twitch.tv/oauth2/validate", nil)
 	req.Header.Add("Client-ID", twitchClientID)
 	req.Header.Add("Authorization", "Bearer "+twitchToken.AccessToken)
@@ -244,51 +263,78 @@ func validateToken(client *http.Client) {
 }
 
 func handleNotification(w http.ResponseWriter, r *http.Request) {
-	body, err := ioutil.ReadAll(r.Body)
-	if err != nil {
-		panic(err)
+	var streams twitchStreamJson
+	log.Printf("Handling notification: %v\n", r.URL)
+	challenge := r.URL.Query().Get("hub.challenge")
+	log.Printf("Challenge is: %v\n", challenge)
+
+	if challenge != "" {
+		w.Write([]byte(challenge))
+	} else {
+		w.WriteHeader(http.StatusNoContent)
+		log.Printf("Responded to webhook\n")
+		defer r.Body.Close()
+		body, err := ioutil.ReadAll(r.Body)
+		if err != nil {
+			log.Println(err)
+		}
+
+		err = json.Unmarshal(body, &streams)
+
+		if err != nil {
+			log.Println(err)
+		}
+		if len(streams.Streams) != 0 {
+			postNotification(streams.Streams[:1])
+		}
 	}
-	log.Printf("Request body received: %s", string(body))
 }
 
-func registerWebhook(client *http.Client) {
-	userid := getTwitchUser("paintbrushpuke", client).Id
+func registerWebhook(client *http.Client, subAction string) {
+	userid := getTwitchUser("paintbrushpuke").Id
+	log.Println("UserID is: ", userid)
 	hub := &hub{
-		Callback:     "ec2-3-134-113-251.us-east-2.compute.amazonaws.com:8080/notify",
-		Mode:         "subscribe",
+		Callback:     "http://ec2-3-134-113-251.us-east-2.compute.amazonaws.com/notify",
+		Mode:         subAction,
 		Topic:        "https://api.twitch.tv/helix/streams?user_id=" + userid,
 		LeaseSeconds: 864000,
 	}
 	body, _ := json.Marshal(hub)
+	//log.Printf("Registering hub: %s", string(body))
 
 	req, err := http.NewRequest("POST", "https://api.twitch.tv/helix/webhooks/hub", bytes.NewBuffer(body))
 	req.Header.Add("Client-ID", twitchClientID)
 	req.Header.Add("Authorization", "Bearer "+twitchToken.AccessToken)
+	req.Header.Add("Content-type", "application/json")
 
-	validateToken(client)
+	validateToken()
+	log.Println("Registering webhook")
 	resp, err := client.Do(req)
 	if err != nil {
-
+		log.Println("Panic at webhook POST")
+		panic(err)
 	}
 	defer resp.Body.Close()
+	log.Printf("Webhook returned: %s\n", resp.Status)
 }
 
 func startListen() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/notify", handleNotification)
 
-	err := http.ListenAndServe(":8080", mux)
+	log.Println("Listening on: :80")
+	err := http.ListenAndServe(":80", mux)
 	log.Fatal(err)
 }
 
-func getTwitchUser(username string, client *http.Client) twitchUser {
-	var u twitchUser
+func getTwitchUser(username string) twitchUser {
+	var users twitchUserJson
 
 	req, err := http.NewRequest("GET", "https://api.twitch.tv/helix/users?login="+username, nil)
 	req.Header.Add("Client-ID", twitchClientID)
 	req.Header.Add("Authorization", "Bearer "+twitchToken.AccessToken)
 
-	validateToken(client)
+	validateToken()
 	resp, err := client.Do(req)
 	if err != nil {
 		panic(err)
@@ -300,23 +346,23 @@ func getTwitchUser(username string, client *http.Client) twitchUser {
 		panic(err)
 	}
 
-	err = json.Unmarshal(body, &u)
+	err = json.Unmarshal(body, &users)
 
 	if err != nil {
 		panic(err)
 	}
 
-	return u
+	return users.Users[0]
 }
 
-func getGame(id string, client *http.Client) twitchGame {
-	var g twitchGame
+func getGame(id string) twitchGame {
+	var g twitchGameJson
 
 	req, err := http.NewRequest("GET", "https://api.twitch.tv/helix/games?id="+id, nil)
 	req.Header.Add("Client-ID", twitchClientID)
 	req.Header.Add("Authorization", "Bearer "+twitchToken.AccessToken)
 
-	validateToken(client)
+	validateToken()
 	resp, err := client.Do(req)
 	if err != nil {
 		panic(err)
@@ -334,5 +380,40 @@ func getGame(id string, client *http.Client) twitchGame {
 		panic(err)
 	}
 
-	return g
+	return g.Games[0]
+}
+
+func postNotification(stream []twitchStream) {
+	user := getTwitchUser(stream[0].UserName)
+	game := getTwitchUser(stream[0].GameID)
+	embed := &discordgo.MessageEmbed{
+		Author: &discordgo.MessageEmbedAuthor{
+			URL:     "https://www.twitch.tv/" + stream[0].UserName,
+			Name:    stream[0].UserName,
+			IconURL: strings.Replace(strings.Replace(user.ProfileImage, "{width}", "70", 1), "{height}", "70", 1),
+		},
+		Color: 0xff69b4, // Pink
+		Fields: []*discordgo.MessageEmbedField{
+			&discordgo.MessageEmbedField{
+				Name:   "Viewers",
+				Value:  string(stream[0].ViewerCount),
+				Inline: true,
+			},
+			&discordgo.MessageEmbedField{
+				Name:   "Game",
+				Value:  game.DisplayName,
+				Inline: true,
+			},
+		},
+		Image: &discordgo.MessageEmbedImage{
+			URL: strings.Replace(strings.Replace(stream[0].Thumbnail, "{width}", "320", 1), "{height}", "180", 1),
+		},
+		Thumbnail: &discordgo.MessageEmbedThumbnail{
+			URL: strings.Replace(strings.Replace(user.ProfileImage, "{width}", "70", 1), "{height}", "70", 1),
+		},
+		Title: stream[0].Title,
+		URL:   "https://www.twitch.tv/" + stream[0].UserName,
+	}
+
+	discord.ChannelMessageSendEmbed(channelMap[stream[0].UserName], embed)
 }
