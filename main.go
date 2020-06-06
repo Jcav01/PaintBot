@@ -9,7 +9,9 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
+	"time"
 
 	"golang.org/x/oauth2"
 
@@ -74,6 +76,13 @@ type twitchGameJson struct {
 	Games []twitchGame `json:"data"`
 }
 
+type embedInfo struct {
+	ChannelID string
+	LastLive  string
+	MessageID string
+	ReqCount  uint64
+}
+
 var (
 	commandPrefix      string
 	botID              string
@@ -83,29 +92,26 @@ var (
 	twitchClientSecret string
 	twitchToken        *oauth2.Token
 	oauth2Config       *clientcredentials.Config
-	discord            *discordgo.Session
 	client             *http.Client
-	channelMap         map[string]string
+	channelMap         map[string]*embedInfo
 )
 
 const cfgFile string = "cfg.txt"
+const countFile string = "count.txt"
 const secretsFile string = "secrets.txt"
 
 func main() {
 	getSecrets()
 	loadConfig()
+	go loadCount()
 	generateToken()
-
 	client = &http.Client{}
 
-	go startListen()
-	registerWebhook(client, "unsubscribe")
-	registerWebhook(client, "subscribe")
+	startListen()
+	registerWebhook(client, "paintbrushpuke", "unsubscribe")
+	registerWebhook(client, "paintbrushpuke", "subscribe")
 
-	log.Println("Starting bot...")
-	discord, err := discordgo.New("Bot " + botToken)
-	errCheck("error creating discord session", err)
-	log.Println("New session created...")
+	discord := createDiscordSession()
 	user, err := discord.User("@me")
 	errCheck("error retrieving account", err)
 
@@ -124,6 +130,14 @@ func main() {
 
 	<-make(chan struct{})
 
+}
+
+func createDiscordSession() *discordgo.Session {
+	log.Println("Starting bot...")
+	discord, err := discordgo.New("Bot " + botToken)
+	errCheck("error creating discord session", err)
+	log.Println("New session created...")
+	return discord
 }
 
 func errCheck(msg string, err error) {
@@ -207,7 +221,7 @@ func loadConfig() {
 	}
 	defer file.Close()
 
-	channelMap = make(map[string]string)
+	channelMap = make(map[string]*embedInfo)
 	scanner := bufio.NewScanner(file)
 	for {
 		success := scanner.Scan()
@@ -226,7 +240,11 @@ func loadConfig() {
 		// Get data from scan with Bytes() or Text()
 		//fmt.Println("First word found:", scanner.Text())
 		s := strings.Split(scanner.Text(), " ")
-		channelMap[s[0]] = s[1]
+		channelMap[s[0]] = &embedInfo{
+			ChannelID: s[1],
+			LastLive:  "",
+			ReqCount:  0,
+		}
 
 	}
 }
@@ -284,15 +302,15 @@ func handleNotification(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			log.Println(err)
 		}
-		if len(streams.Streams) != 0 {
-			postNotification(streams.Streams[:1])
+		log.Println("Webhook request body: ", streams)
+		if len(streams.Streams) > 0 {
+			go postNotification(streams.Streams[0])
 		}
 	}
 }
 
-func registerWebhook(client *http.Client, subAction string) {
-	userid := getTwitchUser("paintbrushpuke").Id
-	log.Println("UserID is: ", userid)
+func registerWebhook(client *http.Client, username string, subAction string) {
+	userid := getTwitchUser(username).Id
 	hub := &hub{
 		Callback:     "http://ec2-3-134-113-251.us-east-2.compute.amazonaws.com/notify",
 		Mode:         subAction,
@@ -316,6 +334,14 @@ func registerWebhook(client *http.Client, subAction string) {
 	}
 	defer resp.Body.Close()
 	log.Printf("Webhook returned: %s\n", resp.Status)
+	if subAction == "subscribe" {
+		go renewWebhook(client, username, subAction)
+	}
+}
+
+func renewWebhook(client *http.Client, username string, subAction string) {
+	time.Sleep(239 * time.Hour)
+	registerWebhook(client, username, subAction)
 }
 
 func startListen() {
@@ -323,8 +349,7 @@ func startListen() {
 	mux.HandleFunc("/notify", handleNotification)
 
 	log.Println("Listening on: :80")
-	err := http.ListenAndServe(":80", mux)
-	log.Fatal(err)
+	go http.ListenAndServe(":80", mux)
 }
 
 func getTwitchUser(username string) twitchUser {
@@ -333,6 +358,7 @@ func getTwitchUser(username string) twitchUser {
 	req, err := http.NewRequest("GET", "https://api.twitch.tv/helix/users?login="+username, nil)
 	req.Header.Add("Client-ID", twitchClientID)
 	req.Header.Add("Authorization", "Bearer "+twitchToken.AccessToken)
+	req.Header.Add("Content-type", "application/json")
 
 	validateToken()
 	resp, err := client.Do(req)
@@ -345,22 +371,23 @@ func getTwitchUser(username string) twitchUser {
 	if err != nil {
 		panic(err)
 	}
-
 	err = json.Unmarshal(body, &users)
 
 	if err != nil {
 		panic(err)
 	}
 
+	log.Println(users)
 	return users.Users[0]
 }
 
-func getGame(id string) twitchGame {
+func getTwitchGame(id string) twitchGame {
 	var g twitchGameJson
 
 	req, err := http.NewRequest("GET", "https://api.twitch.tv/helix/games?id="+id, nil)
 	req.Header.Add("Client-ID", twitchClientID)
 	req.Header.Add("Authorization", "Bearer "+twitchToken.AccessToken)
+	req.Header.Add("Content-type", "application/json")
 
 	validateToken()
 	resp, err := client.Do(req)
@@ -380,40 +407,108 @@ func getGame(id string) twitchGame {
 		panic(err)
 	}
 
+	log.Println(g)
 	return g.Games[0]
 }
 
-func postNotification(stream []twitchStream) {
-	user := getTwitchUser(stream[0].UserName)
-	game := getTwitchUser(stream[0].GameID)
+func postNotification(stream twitchStream) {
+	log.Println("Posting notification")
+	user := getTwitchUser(stream.UserName)
+	game := getTwitchGame(stream.GameID)
+
+	discord := createDiscordSession()
+	defer discord.Close()
 	embed := &discordgo.MessageEmbed{
 		Author: &discordgo.MessageEmbedAuthor{
-			URL:     "https://www.twitch.tv/" + stream[0].UserName,
-			Name:    stream[0].UserName,
+			URL:     "https://www.twitch.tv/" + stream.UserName,
+			Name:    stream.UserName,
 			IconURL: strings.Replace(strings.Replace(user.ProfileImage, "{width}", "70", 1), "{height}", "70", 1),
 		},
 		Color: 0xff69b4, // Pink
 		Fields: []*discordgo.MessageEmbedField{
 			&discordgo.MessageEmbedField{
 				Name:   "Viewers",
-				Value:  string(stream[0].ViewerCount),
+				Value:  strconv.Itoa(stream.ViewerCount),
 				Inline: true,
 			},
 			&discordgo.MessageEmbedField{
 				Name:   "Game",
-				Value:  game.DisplayName,
+				Value:  game.Name,
 				Inline: true,
 			},
 		},
 		Image: &discordgo.MessageEmbedImage{
-			URL: strings.Replace(strings.Replace(stream[0].Thumbnail, "{width}", "320", 1), "{height}", "180", 1),
+			URL: strings.Replace(strings.Replace(stream.Thumbnail+"?r="+strconv.FormatUint(channelMap[stream.UserName].ReqCount, 10), "{width}", "320", 1), "{height}", "180", 1),
 		},
 		Thumbnail: &discordgo.MessageEmbedThumbnail{
-			URL: strings.Replace(strings.Replace(user.ProfileImage, "{width}", "70", 1), "{height}", "70", 1),
+			URL: strings.Replace(strings.Replace(game.BoxArt, "{width}", "50", 1), "{height}", "70", 1),
 		},
-		Title: stream[0].Title,
-		URL:   "https://www.twitch.tv/" + stream[0].UserName,
+		Title: stream.Title,
+		URL:   "https://www.twitch.tv/" + stream.UserName,
+	}
+	lastNotify, _ := time.Parse(time.RFC3339, channelMap[stream.UserName].LastLive)
+	newNotify, _ := time.Parse(time.RFC3339, stream.StartedAt)
+	log.Printf("lastNotify: %v, newNotify: %v", lastNotify, newNotify)
+	var msg *discordgo.Message
+	var err error
+	if lastNotify.Equal(newNotify) {
+		msg, err = discord.ChannelMessageEditEmbed(channelMap[stream.UserName].ChannelID, channelMap[stream.UserName].MessageID, embed)
+	} else {
+		msg, err = discord.ChannelMessageSendEmbed(channelMap[stream.UserName].ChannelID, embed)
 	}
 
-	discord.ChannelMessageSendEmbed(channelMap[stream[0].UserName], embed)
+	if err != nil {
+		log.Printf("%v did not send: %v\n", msg, err)
+	} else {
+		channelMap[stream.UserName].LastLive = stream.StartedAt
+		channelMap[stream.UserName].MessageID = msg.ID
+		channelMap[stream.UserName].ReqCount++
+		go writeCount()
+	}
+}
+
+func writeCount() {
+	file, err := os.OpenFile(countFile, os.O_WRONLY|os.O_CREATE, 0666)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer file.Close()
+	var totalBytes int
+	for key, element := range channelMap {
+		bytesWritten, err := file.WriteString(key + " " + strconv.FormatUint(element.ReqCount, 10))
+		if err != nil {
+			log.Println(err)
+		}
+		totalBytes += bytesWritten
+	}
+
+	file.Sync()
+}
+
+func loadCount() {
+	file, err := os.Open(countFile)
+	if err != nil {
+		log.Println(err)
+		return
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	for {
+		success := scanner.Scan()
+		if success == false {
+			// False on error or EOF. Check error
+			err = scanner.Err()
+			if err == nil {
+				log.Println("Scan completed and reached EOF")
+				return
+			} else {
+				log.Fatal(err)
+				return
+			}
+		}
+		s := strings.Split(scanner.Text(), " ")
+		count, _ := strconv.ParseUint(s[1], 10, 64)
+		channelMap[s[0]].ReqCount = count
+	}
 }
