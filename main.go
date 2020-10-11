@@ -75,7 +75,7 @@ type embedInfo struct {
 	ChannelID string
 	LastLive  string
 	MessageID string
-	Colour    int
+	Colour    int64
 }
 
 var (
@@ -183,7 +183,7 @@ func loadConfig() {
 		// Get data from scan with Bytes() or Text()
 		//fmt.Println("First word found:", scanner.Text())
 		s := strings.Split(scanner.Text(), " ")
-		colour, err := strconv.Atoi(s[2])
+		colour, err := strconv.ParseInt(s[2], 0, 64)
 		if err != nil {
 			log.Fatal(err)
 			return
@@ -372,7 +372,7 @@ func postNotification(stream twitchStream) {
 			Name:    stream.UserName,
 			IconURL: strings.Replace(strings.Replace(user.ProfileImage, "{width}", "70", 1), "{height}", "70", 1),
 		},
-		Color: channelMap[strings.ToLower(stream.UserName)].Colour,
+		Color: int(channelMap[strings.ToLower(stream.UserName)].Colour),
 		Fields: []*discordgo.MessageEmbedField{
 			&discordgo.MessageEmbedField{
 				Name:   "Viewers",
