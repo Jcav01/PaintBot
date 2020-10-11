@@ -80,7 +80,6 @@ type embedInfo struct {
 	ChannelID string
 	LastLive  string
 	MessageID string
-	ReqCount  uint64
 	Colour    int
 }
 
@@ -104,7 +103,6 @@ const secretsFile string = "secrets.txt"
 func main() {
 	getSecrets()
 	loadConfig()
-	go loadCount()
 	generateToken()
 	client = &http.Client{}
 
@@ -241,11 +239,15 @@ func loadConfig() {
 		// Get data from scan with Bytes() or Text()
 		//fmt.Println("First word found:", scanner.Text())
 		s := strings.Split(scanner.Text(), " ")
+		colour, err := strconv.Atoi(s[2])
+		if err != nil {
+			log.Fatal(err)
+			return
+		}
 		channelMap[s[0]] = &embedInfo{
 			ChannelID: s[1],
 			LastLive:  "",
-			ReqCount:  0,
-			Colour:    s[2],
+			Colour:    colour,
 		}
 
 	}
@@ -440,7 +442,7 @@ func postNotification(stream twitchStream) {
 			},
 		},
 		Image: &discordgo.MessageEmbedImage{
-			URL: strings.Replace(strings.Replace(stream.Thumbnail+"?r="+strconv.FormatUint(channelMap[stream.UserName].ReqCount, 10), "{width}", "320", 1), "{height}", "180", 1),
+			URL: strings.Replace(strings.Replace(stream.Thumbnail+"?r="+time.Now().Format(time.RFC3339), "{width}", "320", 1), "{height}", "180", 1),
 		},
 		Thumbnail: &discordgo.MessageEmbedThumbnail{
 			URL: strings.Replace(strings.Replace(game.BoxArt, "{width}", "50", 1), "{height}", "70", 1),
@@ -448,8 +450,14 @@ func postNotification(stream twitchStream) {
 		Title: stream.Title,
 		URL:   "https://www.twitch.tv/" + stream.UserName,
 	}
-	lastNotify, _ := time.Parse(time.RFC3339, channelMap[stream.UserName].LastLive)
-	newNotify, _ := time.Parse(time.RFC3339, stream.StartedAt)
+	lastNotify, errr := time.Parse(time.RFC3339, channelMap[stream.UserName].LastLive)
+	if errr != nil {
+		log.Printf("Could not parse %v", channelMap[stream.UserName].LastLive)
+	}
+	newNotify, errr := time.Parse(time.RFC3339, stream.StartedAt)
+	if errr != nil {
+		log.Printf("Could not parse %v", stream.StartedAt)
+	}
 	log.Printf("lastNotify: %v, newNotify: %v", lastNotify, newNotify)
 	var msg *discordgo.Message
 	var err error
@@ -464,53 +472,5 @@ func postNotification(stream twitchStream) {
 	} else {
 		channelMap[stream.UserName].LastLive = stream.StartedAt
 		channelMap[stream.UserName].MessageID = msg.ID
-		channelMap[stream.UserName].ReqCount++
-		go writeCount()
-	}
-}
-
-func writeCount() {
-	file, err := os.OpenFile(countFile, os.O_WRONLY|os.O_CREATE, 0666)
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer file.Close()
-	var totalBytes int
-	for key, element := range channelMap {
-		bytesWritten, err := file.WriteString(key + " " + strconv.FormatUint(element.ReqCount, 10))
-		if err != nil {
-			log.Println(err)
-		}
-		totalBytes += bytesWritten
-	}
-
-	file.Sync()
-}
-
-func loadCount() {
-	file, err := os.Open(countFile)
-	if err != nil {
-		log.Println(err)
-		return
-	}
-	defer file.Close()
-
-	scanner := bufio.NewScanner(file)
-	for {
-		success := scanner.Scan()
-		if success == false {
-			// False on error or EOF. Check error
-			err = scanner.Err()
-			if err == nil {
-				log.Println("Scan completed and reached EOF")
-				return
-			} else {
-				log.Fatal(err)
-				return
-			}
-		}
-		s := strings.Split(scanner.Text(), " ")
-		count, _ := strconv.ParseUint(s[1], 10, 64)
-		channelMap[s[0]].ReqCount = count
 	}
 }
