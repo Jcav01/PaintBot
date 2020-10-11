@@ -79,7 +79,6 @@ type embedInfo struct {
 }
 
 var (
-	commandPrefix      string
 	botID              string
 	botToken           string
 	twitchClientID     string
@@ -125,8 +124,6 @@ func main() {
 	err = discord.Open()
 	errCheck("Error opening connection to Discord", err)
 	defer discord.Close()
-
-	commandPrefix = "+"
 
 	<-make(chan struct{})
 
