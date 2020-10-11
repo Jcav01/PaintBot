@@ -428,7 +428,7 @@ func postNotification(stream twitchStream) {
 			Name:    stream.UserName,
 			IconURL: strings.Replace(strings.Replace(user.ProfileImage, "{width}", "70", 1), "{height}", "70", 1),
 		},
-		Color: channelMap[stream.UserName].Colour,
+		Color: channelMap[strings.ToLower(stream.UserName)].Colour,
 		Fields: []*discordgo.MessageEmbedField{
 			&discordgo.MessageEmbedField{
 				Name:   "Viewers",
@@ -450,9 +450,9 @@ func postNotification(stream twitchStream) {
 		Title: stream.Title,
 		URL:   "https://www.twitch.tv/" + stream.UserName,
 	}
-	lastNotify, errr := time.Parse(time.RFC3339, channelMap[stream.UserName].LastLive)
+	lastNotify, errr := time.Parse(time.RFC3339, channelMap[strings.ToLower(stream.UserName)].LastLive)
 	if errr != nil {
-		log.Printf("Could not parse %v", channelMap[stream.UserName].LastLive)
+		log.Printf("Could not parse %v", channelMap[strings.ToLower(stream.UserName)].LastLive)
 	}
 	newNotify, errr := time.Parse(time.RFC3339, stream.StartedAt)
 	if errr != nil {
@@ -462,15 +462,15 @@ func postNotification(stream twitchStream) {
 	var msg *discordgo.Message
 	var err error
 	if lastNotify.Equal(newNotify) {
-		msg, err = discord.ChannelMessageEditEmbed(channelMap[stream.UserName].ChannelID, channelMap[stream.UserName].MessageID, embed)
+		msg, err = discord.ChannelMessageEditEmbed(channelMap[strings.ToLower(stream.UserName)].ChannelID, channelMap[strings.ToLower(stream.UserName)].MessageID, embed)
 	} else {
-		msg, err = discord.ChannelMessageSendEmbed(channelMap[stream.UserName].ChannelID, embed)
+		msg, err = discord.ChannelMessageSendEmbed(channelMap[strings.ToLower(stream.UserName)].ChannelID, embed)
 	}
 
 	if err != nil {
 		log.Printf("%v did not send: %v\n", msg, err)
 	} else {
-		channelMap[stream.UserName].LastLive = stream.StartedAt
-		channelMap[stream.UserName].MessageID = msg.ID
+		channelMap[strings.ToLower(stream.UserName)].LastLive = stream.StartedAt
+		channelMap[strings.ToLower(stream.UserName)].MessageID = msg.ID
 	}
 }
