@@ -21,12 +21,6 @@ import (
 	"golang.org/x/oauth2/twitch"
 )
 
-type announceInfo struct {
-	guildID    string
-	channelID  string
-	twitchName string
-}
-
 type hub struct {
 	Callback     string `json:"hub.callback"`
 	Mode         string `json:"hub.mode"`
@@ -87,7 +81,6 @@ type embedInfo struct {
 var (
 	commandPrefix      string
 	botID              string
-	info               [5]announceInfo
 	botToken           string
 	twitchClientID     string
 	twitchClientSecret string
@@ -124,7 +117,6 @@ func main() {
 	errCheck("error retrieving account", err)
 
 	botID = user.ID
-	discord.AddHandler(commandHandler)
 	discord.AddHandler(func(discord *discordgo.Session, ready *discordgo.Ready) {
 		servers := discord.State.Guilds
 		log.Printf("PaintBot has started on %d servers\n", len(servers))
@@ -165,60 +157,6 @@ func getSecrets() {
 	botToken = s[0]
 	twitchClientID = s[1]
 	twitchClientSecret = s[2]
-}
-
-func commandHandler(discord *discordgo.Session, message *discordgo.MessageCreate) {
-	user := message.Author
-	if user.ID == botID || user.Bot {
-		//Do nothing because the bot is talking
-		return
-	}
-
-	m := strings.Split(message.Content, " ")
-
-	if m[0] == "+repo" {
-		content := "https://github.com/jcav01/PaintBot"
-		discord.ChannelMessageSend(message.ChannelID, content)
-	}
-
-	if m[0] == "+invite" {
-		content := "https://discordapp.com/api/oauth2/authorize?client_id=598318983485325342&permissions=11264&scope=bot"
-		discord.ChannelMessageSend(message.ChannelID, content)
-	}
-
-	if m[0] == "+loadConfig" {
-		loadConfig()
-		discord.ChannelMessageDelete(message.ChannelID, message.ID)
-	}
-
-	if m[0] == "+config" {
-		a := announceInfo{
-			guildID:    message.GuildID,
-			channelID:  message.ChannelID,
-			twitchName: m[1],
-		}
-		writeConfig(a)
-		loadConfig()
-		content := "Wrote info to config"
-		discord.ChannelMessageSend(message.ChannelID, content)
-		discord.ChannelMessageDelete(message.ChannelID, message.ID)
-	}
-}
-
-func writeConfig(cfg announceInfo) {
-	file, err := os.OpenFile(cfgFile, os.O_APPEND|os.O_CREATE, 0666)
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer file.Close()
-
-	bytesWritten, err := file.WriteString(cfg.guildID + " " + cfg.channelID + " " + cfg.twitchName + "\n")
-	if err != nil {
-		log.Println(err)
-	}
-	log.Println("Wrote " + string(bytesWritten) + " bytes to config ")
-
-	file.Sync()
 }
 
 func loadConfig() {
