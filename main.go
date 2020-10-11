@@ -11,6 +11,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/oauth2"
@@ -107,8 +108,16 @@ func main() {
 	client = &http.Client{}
 
 	startListen()
-	registerWebhook(client, "paintbrushpuke", "unsubscribe")
-	registerWebhook(client, "paintbrushpuke", "subscribe")
+	var wg sync.WaitGroup
+	for key := range channelMap {
+		wg.Add(1)
+		go func(username string) {
+			defer wg.Done()
+			registerWebhook(client, username, "unsubscribe")
+			registerWebhook(client, username, "subscribe")
+		}(key)
+	}
+	wg.Wait()
 
 	discord := createDiscordSession()
 	user, err := discord.User("@me")
