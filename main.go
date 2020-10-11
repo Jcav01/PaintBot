@@ -81,6 +81,7 @@ type embedInfo struct {
 	LastLive  string
 	MessageID string
 	ReqCount  uint64
+	Colour    int
 }
 
 var (
@@ -244,6 +245,7 @@ func loadConfig() {
 			ChannelID: s[1],
 			LastLive:  "",
 			ReqCount:  0,
+			Colour:    s[2],
 		}
 
 	}
@@ -424,7 +426,7 @@ func postNotification(stream twitchStream) {
 			Name:    stream.UserName,
 			IconURL: strings.Replace(strings.Replace(user.ProfileImage, "{width}", "70", 1), "{height}", "70", 1),
 		},
-		Color: 0xff69b4, // Pink
+		Color: channelMap[stream.UserName].Colour,
 		Fields: []*discordgo.MessageEmbedField{
 			&discordgo.MessageEmbedField{
 				Name:   "Viewers",
