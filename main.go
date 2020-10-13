@@ -31,7 +31,7 @@ type hub struct {
 }
 
 type twitchUser struct {
-	Id              string `json:"id"`
+	ID              string `json:"id"`
 	Login           string `json:"login"`
 	DisplayName     string `json:"display_name"`
 	UserType        string `json:"type"`
@@ -42,12 +42,12 @@ type twitchUser struct {
 	ViewCount       int    `json:"view_count"`
 	Email           string `json:"email"`
 }
-type twitchUserJson struct {
+type twitchUserJSON struct {
 	Users []twitchUser `json:"data"`
 }
 
 type twitchStream struct {
-	Id          string `json:"id"`
+	ID          string `json:"id"`
 	UserID      string `json:"user_id"`
 	UserName    string `json:"user_name"`
 	GameID      string `json:"game_id"`
@@ -58,16 +58,16 @@ type twitchStream struct {
 	Language    string `json:"language"`
 	Thumbnail   string `json:"thumbnail_url"`
 }
-type twitchStreamJson struct {
+type twitchStreamJSON struct {
 	Streams []twitchStream `json:"data"`
 }
 
 type twitchGame struct {
-	Id     string `json:"id"`
+	ID     string `json:"id"`
 	Name   string `json:"name"`
 	BoxArt string `json:"box_art_url"`
 }
-type twitchGameJson struct {
+type twitchGameJSON struct {
 	Games []twitchGame `json:"data"`
 }
 
@@ -182,10 +182,9 @@ func loadConfig() {
 			if err == nil {
 				log.Println("Scan completed and reached EOF")
 				return
-			} else {
-				log.Fatal(err)
-				return
 			}
+			log.Fatal(err)
+			return
 		}
 
 		// Get data from scan with Bytes() or Text()
@@ -231,13 +230,12 @@ func validateToken() {
 	defer resp.Body.Close()
 	if resp.StatusCode >= 200 && resp.StatusCode <= 299 {
 		return
-	} else {
-		generateToken()
 	}
+	generateToken()
 }
 
 func handleNotification(w http.ResponseWriter, r *http.Request) {
-	var streams twitchStreamJson
+	var streams twitchStreamJSON
 	log.Printf("Handling notification: %v\n", r.URL)
 	challenge := r.URL.Query().Get("hub.challenge")
 	log.Printf("Challenge is: %v\n", challenge)
@@ -266,7 +264,7 @@ func handleNotification(w http.ResponseWriter, r *http.Request) {
 }
 
 func registerWebhook(client *http.Client, username string, subAction string) {
-	userid := getTwitchUser(username).Id
+	userid := getTwitchUser(username).ID
 	hub := &hub{
 		Callback:     "http://ec2-3-134-113-251.us-east-2.compute.amazonaws.com/notify",
 		Mode:         subAction,
@@ -309,7 +307,7 @@ func startListen() {
 }
 
 func getTwitchUser(username string) twitchUser {
-	var users twitchUserJson
+	var users twitchUserJSON
 
 	req, err := http.NewRequest("GET", "https://api.twitch.tv/helix/users?login="+username, nil)
 	req.Header.Add("Client-ID", twitchClientID)
@@ -338,7 +336,7 @@ func getTwitchUser(username string) twitchUser {
 }
 
 func getTwitchGame(id string) twitchGame {
-	var g twitchGameJson
+	var g twitchGameJSON
 
 	req, err := http.NewRequest("GET", "https://api.twitch.tv/helix/games?id="+id, nil)
 	req.Header.Add("Client-ID", twitchClientID)
