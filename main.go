@@ -94,6 +94,14 @@ const countFile string = "count.txt"
 const secretsFile string = "secrets.txt"
 
 func main() {
+	logFile, err := os.OpenFile("paintbot.log", os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
+	if err != nil {
+		log.Fatalf("error opening file: %v", err)
+	}
+	defer logFile.Close()
+
+	log.SetOutput(logFile)
+
 	getSecrets()
 	loadConfig()
 	generateToken()
