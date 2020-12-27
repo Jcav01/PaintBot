@@ -335,7 +335,7 @@ func getTwitchUser(username string) twitchUser {
 	return users.Users[0]
 }
 
-func getTwitchGame(id string) twitchGame {
+func getTwitchGame(id string) *twitchGame {
 	var g twitchGameJSON
 
 	req, err := http.NewRequest("GET", "https://api.twitch.tv/helix/games?id="+id, nil)
@@ -362,13 +362,23 @@ func getTwitchGame(id string) twitchGame {
 	}
 
 	log.Println(g)
-	return g.Games[0]
+	return &g.Games[0]
 }
 
 func postNotification(stream twitchStream) {
 	log.Println("Posting notification")
 	user := getTwitchUser(stream.UserName)
-	game := getTwitchGame(stream.GameID)
+
+	var game *twitchGame
+	if len(stream.GameID) > 0 {
+		game = getTwitchGame(stream.GameID)
+	}
+	if game == nil {
+		game = &twitchGame{
+			Name:   "N/A",
+			BoxArt: "https://images.igdb.com/igdb/image/upload/t_cover_big/nocover_qhhlj6.jpg",
+		}
+	}
 
 	discord := createDiscordSession()
 	defer discord.Close()
@@ -400,6 +410,7 @@ func postNotification(stream twitchStream) {
 		Title: stream.Title,
 		URL:   "https://www.twitch.tv/" + stream.UserName,
 	}
+
 	lastNotify, errr := time.Parse(time.RFC3339, channelMap[strings.ToLower(stream.UserName)].LastLive)
 	if errr != nil {
 		log.Printf("Could not parse %v", channelMap[strings.ToLower(stream.UserName)].LastLive)
