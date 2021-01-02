@@ -87,10 +87,10 @@ var (
 	oauth2Config       *clientcredentials.Config
 	client             *http.Client
 	channelMap         map[string]*embedInfo
+	callbackURL        string
 )
 
 const cfgFile string = "cfg.txt"
-const countFile string = "count.txt"
 const secretsFile string = "secrets.txt"
 
 func main() {
@@ -162,6 +162,7 @@ func getSecrets() {
 	botToken = s[0]
 	twitchClientID = s[1]
 	twitchClientSecret = s[2]
+	callbackURL = s[3]
 }
 
 func loadConfig() {
@@ -266,7 +267,7 @@ func handleNotification(w http.ResponseWriter, r *http.Request) {
 func registerWebhook(client *http.Client, username string, subAction string) {
 	userid := getTwitchUser(username).ID
 	hub := &hub{
-		Callback:     "http://ec2-3-134-113-251.us-east-2.compute.amazonaws.com/notify",
+		Callback:     callbackURL + "6969/notify",
 		Mode:         subAction,
 		Topic:        "https://api.twitch.tv/helix/streams?user_id=" + userid,
 		LeaseSeconds: 864000,
@@ -302,8 +303,8 @@ func startListen() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/notify", handleNotification)
 
-	log.Println("Listening on: :80")
-	go http.ListenAndServe(":80", mux)
+	log.Println("Listening on: :6969")
+	go http.ListenAndServe(":6969", mux)
 }
 
 func getTwitchUser(username string) twitchUser {
