@@ -196,7 +196,7 @@ func loadConfig() {
 			log.Fatal(err)
 			return
 		}
-		channelMap[s[0]] = &embedInfo{
+		channelMap[strings.ToLower(s[0])] = &embedInfo{
 			ChannelID: s[1],
 			LastLive:  "",
 			Colour:    colour,
