@@ -391,12 +391,12 @@ func postNotification(stream twitchStream) {
 		},
 		Color: int(channelMap[strings.ToLower(stream.UserName)].Colour),
 		Fields: []*discordgo.MessageEmbedField{
-			&discordgo.MessageEmbedField{
+			{
 				Name:   "Viewers",
 				Value:  strconv.Itoa(stream.ViewerCount),
 				Inline: true,
 			},
-			&discordgo.MessageEmbedField{
+			{
 				Name:   "Game",
 				Value:  game.Name,
 				Inline: true,
