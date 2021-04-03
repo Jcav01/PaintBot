@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -71,11 +70,17 @@ type twitchGameJSON struct {
 	Games []twitchGame `json:"data"`
 }
 
-type embedInfo struct {
-	ChannelID string
-	LastLive  string
+type discordChannel struct {
+	ChannelID string `json:"id"`
 	MessageID string
-	Colour    int64
+}
+
+type channelInfo struct {
+	ChannelName     string           `json:"channel_name"`
+	Channels        []discordChannel `json:"discord_channel_ids"`
+	ColourString    string           `json:"colour"`
+	HighlightColour int64
+	LastLive        string
 }
 
 var (
@@ -86,7 +91,7 @@ var (
 	twitchToken        *oauth2.Token
 	oauth2Config       *clientcredentials.Config
 	client             *http.Client
-	channelMap         map[string]*embedInfo
+	channelMap         []*channelInfo
 	callbackURL        string
 )
 
@@ -109,13 +114,13 @@ func main() {
 
 	startListen()
 	var wg sync.WaitGroup
-	for key := range channelMap {
+	for _, channel := range channelMap {
 		wg.Add(1)
 		go func(username string) {
 			defer wg.Done()
 			registerWebhook(client, username, "unsubscribe")
 			registerWebhook(client, username, "subscribe")
-		}(key)
+		}(channel.ChannelName)
 	}
 	wg.Wait()
 
@@ -166,42 +171,20 @@ func getSecrets() {
 }
 
 func loadConfig() {
-	file, err := os.Open(cfgFile)
+	content, err := ioutil.ReadFile(cfgFile)
 	if err != nil {
-		log.Println(err)
-		return
+		log.Fatal(err)
 	}
-	defer file.Close()
 
-	channelMap = make(map[string]*embedInfo)
-	scanner := bufio.NewScanner(file)
-	for {
-		success := scanner.Scan()
-		if success == false {
-			// False on error or EOF. Check error
-			err = scanner.Err()
-			if err == nil {
-				log.Println("Scan completed and reached EOF")
-				return
-			}
-			log.Fatal(err)
-			return
-		}
+	json.Unmarshal(content, &channelMap)
 
-		// Get data from scan with Bytes() or Text()
-		//fmt.Println("First word found:", scanner.Text())
-		s := strings.Split(scanner.Text(), " ")
-		colour, err := strconv.ParseInt(s[2], 0, 64)
+	for _, channel := range channelMap {
+		colour, err := strconv.ParseInt(channel.ColourString, 0, 64)
 		if err != nil {
 			log.Fatal(err)
 			return
 		}
-		channelMap[strings.ToLower(s[0])] = &embedInfo{
-			ChannelID: s[1],
-			LastLive:  "",
-			Colour:    colour,
-		}
-
+		channel.HighlightColour = colour
 	}
 }
 
@@ -381,6 +364,14 @@ func postNotification(stream twitchStream) {
 		}
 	}
 
+	channel := &channelInfo{}
+	for _, currChannel := range channelMap {
+		if currChannel.ChannelName == stream.UserName {
+			channel = currChannel
+			break
+		}
+	}
+
 	discord := createDiscordSession()
 	defer discord.Close()
 	embed := &discordgo.MessageEmbed{
@@ -389,7 +380,7 @@ func postNotification(stream twitchStream) {
 			Name:    stream.UserName,
 			IconURL: strings.Replace(strings.Replace(user.ProfileImage, "{width}", "70", 1), "{height}", "70", 1),
 		},
-		Color: int(channelMap[strings.ToLower(stream.UserName)].Colour),
+		Color: int(channel.HighlightColour),
 		Fields: []*discordgo.MessageEmbedField{
 			{
 				Name:   "Viewers",
@@ -412,9 +403,9 @@ func postNotification(stream twitchStream) {
 		URL:   "https://www.twitch.tv/" + stream.UserName,
 	}
 
-	lastNotify, errr := time.Parse(time.RFC3339, channelMap[strings.ToLower(stream.UserName)].LastLive)
+	lastNotify, errr := time.Parse(time.RFC3339, channel.LastLive)
 	if errr != nil {
-		log.Printf("Could not parse %v", channelMap[strings.ToLower(stream.UserName)].LastLive)
+		log.Printf("Could not parse %v", channel.LastLive)
 	}
 	newNotify, errr := time.Parse(time.RFC3339, stream.StartedAt)
 	if errr != nil {
@@ -423,16 +414,18 @@ func postNotification(stream twitchStream) {
 	log.Printf("lastNotify: %v, newNotify: %v", lastNotify, newNotify)
 	var msg *discordgo.Message
 	var err error
-	if lastNotify.Equal(newNotify) {
-		msg, err = discord.ChannelMessageEditEmbed(channelMap[strings.ToLower(stream.UserName)].ChannelID, channelMap[strings.ToLower(stream.UserName)].MessageID, embed)
-	} else {
-		msg, err = discord.ChannelMessageSendEmbed(channelMap[strings.ToLower(stream.UserName)].ChannelID, embed)
-	}
+	for _, channelID := range channel.Channels {
+		if lastNotify.Equal(newNotify) {
+			msg, err = discord.ChannelMessageEditEmbed(channelID.ChannelID, channelID.MessageID, embed)
+		} else {
+			msg, err = discord.ChannelMessageSendEmbed(channelID.ChannelID, embed)
+		}
 
-	if err != nil {
-		log.Printf("%v did not send: %v\n", msg, err)
-	} else {
-		channelMap[strings.ToLower(stream.UserName)].LastLive = stream.StartedAt
-		channelMap[strings.ToLower(stream.UserName)].MessageID = msg.ID
+		if err != nil {
+			log.Printf("%v did not send: %v\n", msg, err)
+		} else {
+			channel.LastLive = stream.StartedAt
+			channelID.MessageID = msg.ID
+		}
 	}
 }
