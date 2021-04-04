@@ -406,7 +406,7 @@ func postNotification(stream twitchStream) {
 	log.Printf("lastNotify: %v, newNotify: %v", lastNotify, newNotify)
 	var msg *discordgo.Message
 	var err error
-	for _, channelID := range channel.Channels {
+	for i, channelID := range channel.Channels {
 		if lastNotify.Equal(newNotify) {
 			msg, err = discord.ChannelMessageEditEmbed(channelID.ChannelID, channelID.MessageID, embed)
 		} else {
@@ -417,7 +417,7 @@ func postNotification(stream twitchStream) {
 			log.Printf("%v did not send: %v\n", msg, err)
 		} else {
 			channel.LastLive = stream.StartedAt
-			channelID.MessageID = msg.ID
+			channel.Channels[i].MessageID = msg.ID
 		}
 	}
 }
