@@ -75,8 +75,8 @@ type discordChannel struct {
 	MessageID string `json:"message_id"`
 }
 
-type channelInfo struct {
-	ChannelName     string           `json:"channel_name"`
+type streamInfo struct {
+	StreamName      string           `json:"stream_name"`
 	Channels        []discordChannel `json:"discord_channel_ids"`
 	ColourString    string           `json:"colour"`
 	HighlightColour int64            `json:"highlight_colour"`
@@ -88,11 +88,12 @@ type secrets struct {
 	TwitchClientID     string `json:"twitch_client_id"`
 	TwitchClientSecret string `json:"twitch_client_secret"`
 	CallbackURL        string `json:"callback_url"`
+	AdminId            string `json:"admin_id"`
 }
 
 type cofiguration struct {
-	Secrets  secrets        `json:"secrets"`
-	Channels []*channelInfo `json:"channels"`
+	Secrets secrets       `json:"secrets"`
+	Streams []*streamInfo `json:"streams"`
 }
 
 var (
@@ -115,18 +116,20 @@ func main() {
 	log.SetOutput(logFile)
 
 	loadConfig()
+	bytes, err := json.Marshal(config)
+	log.Println(string(bytes))
 	generateToken()
 	client = &http.Client{}
 
 	startListen()
 	var wg sync.WaitGroup
-	for _, channel := range config.Channels {
+	for _, channel := range config.Streams {
 		wg.Add(1)
 		go func(username string) {
 			defer wg.Done()
 			registerWebhook(client, username, "unsubscribe")
 			registerWebhook(client, username, "subscribe")
-		}(channel.ChannelName)
+		}(channel.StreamName)
 	}
 	wg.Wait()
 
@@ -138,6 +141,12 @@ func main() {
 	discord.AddHandler(func(discord *discordgo.Session, ready *discordgo.Ready) {
 		servers := discord.State.Guilds
 		log.Printf("PaintBot has started on %d servers\n", len(servers))
+	})
+
+	discord.AddHandler(func(discord *discordgo.Session, message *discordgo.MessageCreate) {
+		if message.Message.Author.ID == config.Secrets.AdminId && strings.HasPrefix(message.Message.Content, "+join") {
+			go addNewNotification(message.Message)
+		}
 	})
 
 	err = discord.Open()
@@ -170,7 +179,7 @@ func loadConfig() {
 
 	json.Unmarshal(content, &config)
 
-	for _, channel := range config.Channels {
+	for _, channel := range config.Streams {
 		colour, err := strconv.ParseInt(channel.ColourString, 0, 64)
 		if err != nil {
 			log.Fatal(err)
@@ -356,9 +365,9 @@ func postNotification(stream twitchStream) {
 		}
 	}
 
-	channel := &channelInfo{}
-	for _, currChannel := range config.Channels {
-		if strings.ToLower(currChannel.ChannelName) == strings.ToLower(stream.UserName) {
+	channel := &streamInfo{}
+	for _, currChannel := range config.Streams {
+		if strings.ToLower(currChannel.StreamName) == strings.ToLower(stream.UserName) {
 			channel = currChannel
 			break
 		}
@@ -420,4 +429,78 @@ func postNotification(stream twitchStream) {
 			channel.Channels[i].MessageID = msg.ID
 		}
 	}
+}
+
+func addNewNotification(message *discordgo.Message) {
+	var index int
+	var streamFound, hasColour bool
+
+	params := strings.Split(message.Content, " ")
+	if len(params) == 4 {
+		hasColour = true
+	}
+
+	for i, stream := range config.Streams {
+		if strings.ToLower(stream.StreamName) == strings.ToLower(params[1]) {
+			index = i
+			streamFound = true
+			break
+		}
+	}
+
+	if streamFound {
+		var channelFound bool
+		for _, channel := range config.Streams[index].Channels {
+			if channel.ChannelID == params[2] {
+				channelFound = true
+				break
+			}
+		}
+		if channelFound {
+			if hasColour {
+				config.Streams[index].ColourString = params[3]
+			}
+			return
+		} else {
+			config.Streams[index].Channels = append(config.Streams[index].Channels, discordChannel{
+				ChannelID: params[2],
+			})
+			if hasColour {
+				config.Streams[index].ColourString = params[3]
+			}
+		}
+	} else {
+		config.Streams = append(config.Streams, &streamInfo{
+			StreamName: params[1],
+			Channels: []discordChannel{{
+				ChannelID: params[2],
+			}},
+			ColourString: params[3],
+		})
+
+		go registerWebhook(client, params[1], "subscribe")
+	}
+
+	colour, err := strconv.ParseInt(config.Streams[len(config.Streams)-1].ColourString, 0, 64)
+	if err != nil {
+		log.Fatal(err)
+		return
+	}
+	config.Streams[len(config.Streams)-1].HighlightColour = colour
+
+	go writeConfig()
+}
+
+func writeConfig() {
+	f, err := os.OpenFile("cfg.txt", os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0755)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer f.Close()
+
+	bytes, err := json.Marshal(config)
+	if err != nil {
+		log.Fatal(err)
+	}
+	f.Write(bytes)
 }
