@@ -72,27 +72,35 @@ type twitchGameJSON struct {
 
 type discordChannel struct {
 	ChannelID string `json:"id"`
-	MessageID string
+	MessageID string `json:"message_id"`
 }
 
 type channelInfo struct {
 	ChannelName     string           `json:"channel_name"`
 	Channels        []discordChannel `json:"discord_channel_ids"`
 	ColourString    string           `json:"colour"`
-	HighlightColour int64
-	LastLive        string
+	HighlightColour int64            `json:"highlight_colour"`
+	LastLive        string           `json:"last_live"`
+}
+
+type secrets struct {
+	BotToken           string `json:"bot_token"`
+	TwitchClientID     string `json:"twitch_client_id"`
+	TwitchClientSecret string `json:"twitch_client_secret"`
+	CallbackURL        string `json:"callback_url"`
+}
+
+type cofiguration struct {
+	Secrets  secrets        `json:"secrets"`
+	Channels []*channelInfo `json:"channels"`
 }
 
 var (
-	botID              string
-	botToken           string
-	twitchClientID     string
-	twitchClientSecret string
-	twitchToken        *oauth2.Token
-	oauth2Config       *clientcredentials.Config
-	client             *http.Client
-	channelMap         []*channelInfo
-	callbackURL        string
+	botID        string
+	twitchToken  *oauth2.Token
+	oauth2Config *clientcredentials.Config
+	client       *http.Client
+	config       *cofiguration
 )
 
 const cfgFile string = "cfg.txt"
@@ -107,14 +115,13 @@ func main() {
 
 	log.SetOutput(logFile)
 
-	getSecrets()
 	loadConfig()
 	generateToken()
 	client = &http.Client{}
 
 	startListen()
 	var wg sync.WaitGroup
-	for _, channel := range channelMap {
+	for _, channel := range config.Channels {
 		wg.Add(1)
 		go func(username string) {
 			defer wg.Done()
@@ -139,12 +146,11 @@ func main() {
 	defer discord.Close()
 
 	<-make(chan struct{})
-
 }
 
 func createDiscordSession() *discordgo.Session {
 	log.Println("Starting bot...")
-	discord, err := discordgo.New("Bot " + botToken)
+	discord, err := discordgo.New("Bot " + config.Secrets.BotToken)
 	errCheck("error creating discord session", err)
 	log.Println("New session created...")
 	return discord
@@ -157,28 +163,15 @@ func errCheck(msg string, err error) {
 	}
 }
 
-func getSecrets() {
-	data, err := ioutil.ReadFile(secretsFile)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	s := strings.Split(string(data), "\r\n")
-	botToken = s[0]
-	twitchClientID = s[1]
-	twitchClientSecret = s[2]
-	callbackURL = s[3]
-}
-
 func loadConfig() {
 	content, err := ioutil.ReadFile(cfgFile)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	json.Unmarshal(content, &channelMap)
+	json.Unmarshal(content, &config)
 
-	for _, channel := range channelMap {
+	for _, channel := range config.Channels {
 		colour, err := strconv.ParseInt(channel.ColourString, 0, 64)
 		if err != nil {
 			log.Fatal(err)
@@ -190,8 +183,8 @@ func loadConfig() {
 
 func generateToken() {
 	oauth2Config = &clientcredentials.Config{
-		ClientID:     twitchClientID,
-		ClientSecret: twitchClientSecret,
+		ClientID:     config.Secrets.TwitchClientID,
+		ClientSecret: config.Secrets.TwitchClientSecret,
 		TokenURL:     twitch.Endpoint.TokenURL,
 	}
 
@@ -204,7 +197,7 @@ func generateToken() {
 
 func validateToken() {
 	req, err := http.NewRequest("GET", "https://id.twitch.tv/oauth2/validate", nil)
-	req.Header.Add("Client-ID", twitchClientID)
+	req.Header.Add("Client-ID", config.Secrets.TwitchClientID)
 	req.Header.Add("Authorization", "Bearer "+twitchToken.AccessToken)
 
 	resp, err := client.Do(req)
@@ -250,7 +243,7 @@ func handleNotification(w http.ResponseWriter, r *http.Request) {
 func registerWebhook(client *http.Client, username string, subAction string) {
 	userid := getTwitchUser(username).ID
 	hub := &hub{
-		Callback:     callbackURL + "6969/notify",
+		Callback:     config.Secrets.CallbackURL + "6969/notify",
 		Mode:         subAction,
 		Topic:        "https://api.twitch.tv/helix/streams?user_id=" + userid,
 		LeaseSeconds: 864000,
@@ -259,7 +252,7 @@ func registerWebhook(client *http.Client, username string, subAction string) {
 	//log.Printf("Registering hub: %s", string(body))
 
 	req, err := http.NewRequest("POST", "https://api.twitch.tv/helix/webhooks/hub", bytes.NewBuffer(body))
-	req.Header.Add("Client-ID", twitchClientID)
+	req.Header.Add("Client-ID", config.Secrets.TwitchClientID)
 	req.Header.Add("Authorization", "Bearer "+twitchToken.AccessToken)
 	req.Header.Add("Content-type", "application/json")
 
@@ -294,7 +287,7 @@ func getTwitchUser(username string) twitchUser {
 	var users twitchUserJSON
 
 	req, err := http.NewRequest("GET", "https://api.twitch.tv/helix/users?login="+username, nil)
-	req.Header.Add("Client-ID", twitchClientID)
+	req.Header.Add("Client-ID", config.Secrets.TwitchClientID)
 	req.Header.Add("Authorization", "Bearer "+twitchToken.AccessToken)
 	req.Header.Add("Content-type", "application/json")
 
@@ -323,7 +316,7 @@ func getTwitchGame(id string) *twitchGame {
 	var g twitchGameJSON
 
 	req, err := http.NewRequest("GET", "https://api.twitch.tv/helix/games?id="+id, nil)
-	req.Header.Add("Client-ID", twitchClientID)
+	req.Header.Add("Client-ID", config.Secrets.TwitchClientID)
 	req.Header.Add("Authorization", "Bearer "+twitchToken.AccessToken)
 	req.Header.Add("Content-type", "application/json")
 
@@ -365,7 +358,7 @@ func postNotification(stream twitchStream) {
 	}
 
 	channel := &channelInfo{}
-	for _, currChannel := range channelMap {
+	for _, currChannel := range config.Channels {
 		if currChannel.ChannelName == stream.UserName {
 			channel = currChannel
 			break

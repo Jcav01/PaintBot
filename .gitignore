@@ -2,3 +2,4 @@
 *.txt
 *.pem
 go.sum
+*.log
