@@ -104,7 +104,6 @@ var (
 )
 
 const cfgFile string = "cfg.txt"
-const secretsFile string = "secrets.txt"
 
 func main() {
 	logFile, err := os.OpenFile("paintbot.log", os.O_RDWR|os.O_CREATE|os.O_APPEND, 0666)
@@ -359,7 +358,7 @@ func postNotification(stream twitchStream) {
 
 	channel := &channelInfo{}
 	for _, currChannel := range config.Channels {
-		if currChannel.ChannelName == stream.UserName {
+		if strings.ToLower(currChannel.ChannelName) == strings.ToLower(stream.UserName) {
 			channel = currChannel
 			break
 		}
