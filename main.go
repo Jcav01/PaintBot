@@ -81,6 +81,7 @@ type streamInfo struct {
 	ColourString    string           `json:"colour"`
 	HighlightColour int64            `json:"highlight_colour"`
 	LastLive        string           `json:"last_live"`
+	Description     string           `json:"description"`
 }
 
 type secrets struct {
@@ -375,33 +376,39 @@ func postNotification(stream twitchStream) {
 
 	discord := createDiscordSession()
 	defer discord.Close()
-	embed := &discordgo.MessageEmbed{
-		Author: &discordgo.MessageEmbedAuthor{
-			URL:     "https://www.twitch.tv/" + stream.UserName,
-			Name:    stream.UserName,
-			IconURL: strings.Replace(strings.Replace(user.ProfileImage, "{width}", "70", 1), "{height}", "70", 1),
-		},
-		Color: int(channel.HighlightColour),
-		Fields: []*discordgo.MessageEmbedField{
-			{
-				Name:   "Viewers",
-				Value:  strconv.Itoa(stream.ViewerCount),
-				Inline: true,
+	message := &discordgo.MessageSend{
+		Embed: &discordgo.MessageEmbed{
+			Author: &discordgo.MessageEmbedAuthor{
+				URL:     "https://www.twitch.tv/" + stream.UserName,
+				Name:    stream.UserName,
+				IconURL: strings.Replace(strings.Replace(user.ProfileImage, "{width}", "70", 1), "{height}", "70", 1),
 			},
-			{
-				Name:   "Game",
-				Value:  game.Name,
-				Inline: true,
+			Color: int(channel.HighlightColour),
+			Fields: []*discordgo.MessageEmbedField{
+				{
+					Name:   "Viewers",
+					Value:  strconv.Itoa(stream.ViewerCount),
+					Inline: true,
+				},
+				{
+					Name:   "Game",
+					Value:  game.Name,
+					Inline: true,
+				},
 			},
+			Image: &discordgo.MessageEmbedImage{
+				URL: strings.Replace(strings.Replace(stream.Thumbnail+"?r="+time.Now().Format(time.RFC3339), "{width}", "320", 1), "{height}", "180", 1),
+			},
+			Thumbnail: &discordgo.MessageEmbedThumbnail{
+				URL: strings.Replace(strings.Replace(game.BoxArt, "{width}", "50", 1), "{height}", "70", 1),
+			},
+			Title: stream.Title,
+			URL:   "https://www.twitch.tv/" + stream.UserName,
 		},
-		Image: &discordgo.MessageEmbedImage{
-			URL: strings.Replace(strings.Replace(stream.Thumbnail+"?r="+time.Now().Format(time.RFC3339), "{width}", "320", 1), "{height}", "180", 1),
-		},
-		Thumbnail: &discordgo.MessageEmbedThumbnail{
-			URL: strings.Replace(strings.Replace(game.BoxArt, "{width}", "50", 1), "{height}", "70", 1),
-		},
-		Title: stream.Title,
-		URL:   "https://www.twitch.tv/" + stream.UserName,
+	}
+
+	if channel.Description != "" {
+		message.Content = channel.Description
 	}
 
 	lastNotify, errr := time.Parse(time.RFC3339, channel.LastLive)
@@ -417,9 +424,15 @@ func postNotification(stream twitchStream) {
 	var err error
 	for i, channelID := range channel.Channels {
 		if lastNotify.Equal(newNotify) {
-			msg, err = discord.ChannelMessageEditEmbed(channelID.ChannelID, channelID.MessageID, embed)
+			messageEdit := &discordgo.MessageEdit{
+				ID:      channelID.MessageID,
+				Channel: channelID.ChannelID,
+				Content: &message.Content,
+				Embed:   message.Embed,
+			}
+			msg, err = discord.ChannelMessageEditComplex(messageEdit)
 		} else {
-			msg, err = discord.ChannelMessageSendEmbed(channelID.ChannelID, embed)
+			msg, err = discord.ChannelMessageSendComplex(channelID.ChannelID, message)
 		}
 
 		if err != nil {
