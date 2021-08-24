@@ -20,13 +20,16 @@ import (
 	"golang.org/x/oauth2/twitch"
 )
 
-type hub struct {
-	Callback     string `json:"hub.callback"`
-	Mode         string `json:"hub.mode"`
-	Topic        string `json:"hub.topic"`
-	LeaseSeconds int    `json:"hub.lease_seconds"`
-	Secret       string `json:"hub.secret"`
-	Challenge    string `json:"hub.challenge"`
+type createSubscription struct {
+	EventType string            `json:"type"`
+	Version   string            `json:"version"`
+	Condition map[string]string `json:"condition"`
+	Transport transport         `json:"transport"`
+}
+type transport struct {
+	Method   string `json:"method"`
+	Callback string `json:"callback"`
+	Secret   string `json:"secret"`
 }
 
 type twitchUser struct {
@@ -45,20 +48,19 @@ type twitchUserJSON struct {
 	Users []twitchUser `json:"data"`
 }
 
-type twitchStream struct {
-	ID          string `json:"id"`
-	UserID      string `json:"user_id"`
-	UserName    string `json:"user_name"`
-	GameID      string `json:"game_id"`
-	Type        string `json:"type"`
-	Title       string `json:"title"`
-	ViewerCount int    `json:"viewer_count"`
-	StartedAt   string `json:"started_at"`
-	Language    string `json:"language"`
-	Thumbnail   string `json:"thumbnail_url"`
+type subscriptionInfo struct {
+	ID        string            `json:"id"`
+	Status    string            `json:"status"`
+	Type      string            `json:"type"`
+	Version   string            `json:"version"`
+	Cost      int               `json:"cost"`
+	Condition map[string]string `json:"condition"`
+	Transport map[string]string `json:"transport"`
+	CreatedAt string            `json:"created_at"`
 }
-type twitchStreamJSON struct {
-	Streams []twitchStream `json:"data"`
+type notification struct {
+	SubscriptionInfo subscriptionInfo  `json:"subscription"`
+	Event            map[string]string `json:"event"`
 }
 
 type twitchGame struct {
@@ -144,12 +146,6 @@ func main() {
 		log.Printf("PaintBot has started on %d servers\n", len(servers))
 	})
 
-	discord.AddHandler(func(discord *discordgo.Session, message *discordgo.MessageCreate) {
-		if message.Message.Author.ID == config.Secrets.AdminId && strings.HasPrefix(message.Message.Content, "+join") {
-			go addNewNotification(message.Message)
-		}
-	})
-
 	err = discord.Open()
 	errCheck("Error opening connection to Discord", err)
 	defer discord.Close()
@@ -221,7 +217,7 @@ func validateToken() {
 }
 
 func handleNotification(w http.ResponseWriter, r *http.Request) {
-	var streams twitchStreamJSON
+	var twitchNotif notification
 	log.Printf("Handling notification: %v\n", r.URL)
 	challenge := r.URL.Query().Get("hub.challenge")
 	log.Printf("Challenge is: %v\n", challenge)
@@ -237,30 +233,34 @@ func handleNotification(w http.ResponseWriter, r *http.Request) {
 			log.Println(err)
 		}
 
-		err = json.Unmarshal(body, &streams)
+		err = json.Unmarshal(body, &twitchNotif)
 
 		if err != nil {
 			log.Println(err)
 		}
-		log.Println("Webhook request body: ", streams)
-		if len(streams.Streams) > 0 {
-			go postNotification(streams.Streams[0])
-		}
+		log.Println("Webhook request body: ", twitchNotif)
+		go postNotification(twitchNotif)
 	}
 }
 
 func registerWebhook(client *http.Client, username string, subAction string) {
 	userid := getTwitchUser(username).ID
-	hub := &hub{
-		Callback:     config.Secrets.CallbackURL + "6969/notify",
-		Mode:         subAction,
-		Topic:        "https://api.twitch.tv/helix/streams?user_id=" + userid,
-		LeaseSeconds: 864000,
+	conditions := make(map[string]string)
+	conditions["broadcaster_user_id"] = userid
+	createSubscription := &createSubscription{
+		EventType: "stream.online",
+		Version:   "1",
+		Condition: conditions,
+		Transport: transport{
+			Method:   "webhook",
+			Callback: "https://bot.paintbot.net/notify",
+			Secret:   "",
+		},
 	}
-	body, _ := json.Marshal(hub)
-	//log.Printf("Registering hub: %s", string(body))
+	body, _ := json.Marshal(createSubscription)
+	//log.Printf("Registering createSubscription: %s", string(body))
 
-	req, err := http.NewRequest("POST", "https://api.twitch.tv/helix/webhooks/hub", bytes.NewBuffer(body))
+	req, err := http.NewRequest("POST", "https://api.twitch.tv/helix/eventsub/subscriptions", bytes.NewBuffer(body))
 	req.Header.Add("Client-ID", config.Secrets.TwitchClientID)
 	req.Header.Add("Authorization", "Bearer "+twitchToken.AccessToken)
 	req.Header.Add("Content-type", "application/json")
@@ -273,10 +273,8 @@ func registerWebhook(client *http.Client, username string, subAction string) {
 		panic(err)
 	}
 	defer resp.Body.Close()
-	log.Printf("Webhook returned: %s\n", resp.Status)
-	if subAction == "subscribe" {
-		go renewWebhook(client, username, subAction)
-	}
+	body, _ = ioutil.ReadAll(resp.Body)
+	log.Printf("Webhook returned: %s\n%s\n", resp.Status, string(body))
 }
 
 func renewWebhook(client *http.Client, username string, subAction string) {
@@ -292,10 +290,10 @@ func startListen() {
 	go http.ListenAndServe(":6969", mux)
 }
 
-func getTwitchUser(username string) twitchUser {
+func getTwitchUser(userId string) twitchUser {
 	var users twitchUserJSON
 
-	req, err := http.NewRequest("GET", "https://api.twitch.tv/helix/users?login="+username, nil)
+	req, err := http.NewRequest("GET", "https://api.twitch.tv/helix/users?id="+userId, nil)
 	req.Header.Add("Client-ID", config.Secrets.TwitchClientID)
 	req.Header.Add("Authorization", "Bearer "+twitchToken.AccessToken)
 	req.Header.Add("Content-type", "application/json")
@@ -351,24 +349,24 @@ func getTwitchGame(id string) *twitchGame {
 	return &g.Games[0]
 }
 
-func postNotification(stream twitchStream) {
+func postNotification(twitchNotif notification) {
 	log.Println("Posting notification")
-	user := getTwitchUser(stream.UserName)
+	user := getTwitchUser(twitchNotif.Event["broadcaster_user_id"])
 
 	var game *twitchGame
-	if len(stream.GameID) > 0 {
-		game = getTwitchGame(stream.GameID)
-	}
+	// if len(twitchNotif.GameID) > 0 {
+	// 	game = getTwitchGame(twitchNotif.GameID)
+	// }
 	if game == nil {
 		game = &twitchGame{
 			Name:   "N/A",
-			BoxArt: "https://images.igdb.com/igdb/image/upload/t_cover_big/nocover_qhhlj6.jpg",
+			BoxArt: "https://images.igdb.com/igdb/image/upload/t_cover_big/nocover_qhhlj6.png",
 		}
 	}
 
 	channel := &streamInfo{}
 	for _, currChannel := range config.Streams {
-		if strings.ToLower(currChannel.StreamName) == strings.ToLower(stream.UserName) {
+		if strings.ToLower(currChannel.StreamName) == strings.ToLower(twitchNotif.Event["broadcaster_user_name"]) {
 			channel = currChannel
 			break
 		}
@@ -379,17 +377,17 @@ func postNotification(stream twitchStream) {
 	message := &discordgo.MessageSend{
 		Embed: &discordgo.MessageEmbed{
 			Author: &discordgo.MessageEmbedAuthor{
-				URL:     "https://www.twitch.tv/" + stream.UserName,
-				Name:    stream.UserName,
+				URL:     "https://www.twitch.tv/" + twitchNotif.Event["broadcaster_user_name"],
+				Name:    twitchNotif.Event["broadcaster_user_name"],
 				IconURL: strings.Replace(strings.Replace(user.ProfileImage, "{width}", "70", 1), "{height}", "70", 1),
 			},
 			Color: int(channel.HighlightColour),
 			Fields: []*discordgo.MessageEmbedField{
-				{
-					Name:   "Viewers",
-					Value:  strconv.Itoa(stream.ViewerCount),
-					Inline: true,
-				},
+				// {
+				// 	Name:   "Viewers",
+				// 	Value:  strconv.Itoa(twitchNotif.ViewerCount),
+				// 	Inline: true,
+				// },
 				{
 					Name:   "Game",
 					Value:  game.Name,
@@ -397,13 +395,13 @@ func postNotification(stream twitchStream) {
 				},
 			},
 			Image: &discordgo.MessageEmbedImage{
-				URL: strings.Replace(strings.Replace(stream.Thumbnail+"?r="+time.Now().Format(time.RFC3339), "{width}", "320", 1), "{height}", "180", 1),
+				URL: "https://static-cdn.jtvnw.net/previews-ttv/live_user_" + twitchNotif.Event["broadcaster_user_name"] + "-320x180.png" + "?r=" + time.Now().Format(time.RFC3339),
 			},
 			Thumbnail: &discordgo.MessageEmbedThumbnail{
 				URL: strings.Replace(strings.Replace(game.BoxArt, "{width}", "50", 1), "{height}", "70", 1),
 			},
-			Title: stream.Title,
-			URL:   "https://www.twitch.tv/" + stream.UserName,
+			Title: twitchNotif.Title,
+			URL:   "https://www.twitch.tv/" + twitchNotif.Event["broadcaster_user_name"],
 		},
 	}
 
@@ -411,15 +409,6 @@ func postNotification(stream twitchStream) {
 		message.Content = channel.Description
 	}
 
-	lastNotify, errr := time.Parse(time.RFC3339, channel.LastLive)
-	if errr != nil {
-		log.Printf("Could not parse %v", channel.LastLive)
-	}
-	newNotify, errr := time.Parse(time.RFC3339, stream.StartedAt)
-	if errr != nil {
-		log.Printf("Could not parse %v", stream.StartedAt)
-	}
-	log.Printf("lastNotify: %v, newNotify: %v", lastNotify, newNotify)
 	var msg *discordgo.Message
 	var err error
 	for i, channelID := range channel.Channels {
@@ -438,70 +427,9 @@ func postNotification(stream twitchStream) {
 		if err != nil {
 			log.Printf("%v did not send: %v\n", msg, err)
 		} else {
-			channel.LastLive = stream.StartedAt
 			channel.Channels[i].MessageID = msg.ID
 		}
 	}
-}
-
-func addNewNotification(message *discordgo.Message) {
-	var index int
-	var streamFound, hasColour bool
-
-	params := strings.Split(message.Content, " ")
-	if len(params) == 4 {
-		hasColour = true
-	}
-
-	for i, stream := range config.Streams {
-		if strings.ToLower(stream.StreamName) == strings.ToLower(params[1]) {
-			index = i
-			streamFound = true
-			break
-		}
-	}
-
-	if streamFound {
-		var channelFound bool
-		for _, channel := range config.Streams[index].Channels {
-			if channel.ChannelID == params[2] {
-				channelFound = true
-				break
-			}
-		}
-		if channelFound {
-			if hasColour {
-				config.Streams[index].ColourString = params[3]
-			}
-			return
-		} else {
-			config.Streams[index].Channels = append(config.Streams[index].Channels, discordChannel{
-				ChannelID: params[2],
-			})
-			if hasColour {
-				config.Streams[index].ColourString = params[3]
-			}
-		}
-	} else {
-		config.Streams = append(config.Streams, &streamInfo{
-			StreamName: params[1],
-			Channels: []discordChannel{{
-				ChannelID: params[2],
-			}},
-			ColourString: params[3],
-		})
-
-		go registerWebhook(client, params[1], "subscribe")
-	}
-
-	colour, err := strconv.ParseInt(config.Streams[len(config.Streams)-1].ColourString, 0, 64)
-	if err != nil {
-		log.Fatal(err)
-		return
-	}
-	config.Streams[len(config.Streams)-1].HighlightColour = colour
-
-	go writeConfig()
 }
 
 func writeConfig() {
