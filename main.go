@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"io/ioutil"
 	"log"
@@ -13,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/crypto/acme/autocert"
 	"golang.org/x/oauth2"
 
 	"github.com/bwmarrin/discordgo"
@@ -46,6 +48,20 @@ type twitchUser struct {
 }
 type twitchUserJSON struct {
 	Users []twitchUser `json:"data"`
+}
+
+type twitchChannel struct {
+	ID          string `json:"broadcaster_id"`
+	Login       string `json:"broadcaster_login"`
+	DisplayName string `json:"broadcaster_name"`
+	Language    string `json:"broadcaster_language"`
+	GameID      string `json:"game_id"`
+	GameName    string `json:"game_name"`
+	Title       string `json:"title"`
+	Delay       int    `json:"delay"`
+}
+type twitchChannelJSON struct {
+	Channel []twitchChannel `json:"data"`
 }
 
 type subscriptionInfo struct {
@@ -82,7 +98,7 @@ type streamInfo struct {
 	Channels        []discordChannel `json:"discord_channel_ids"`
 	ColourString    string           `json:"colour"`
 	HighlightColour int64            `json:"highlight_colour"`
-	LastLive        string           `json:"last_live"`
+	CurrentStreamID string           `json:"current_stream"`
 	Description     string           `json:"description"`
 }
 
@@ -99,8 +115,9 @@ type cofiguration struct {
 	Streams []*streamInfo `json:"streams"`
 }
 
+type Handler func(http.ResponseWriter, *http.Request) error
+
 var (
-	botID        string
 	twitchToken  *oauth2.Token
 	oauth2Config *clientcredentials.Config
 	client       *http.Client
@@ -125,22 +142,20 @@ func main() {
 	client = &http.Client{}
 
 	startListen()
+
 	var wg sync.WaitGroup
 	for _, channel := range config.Streams {
 		wg.Add(1)
 		go func(username string) {
 			defer wg.Done()
-			registerWebhook(client, username, "unsubscribe")
 			registerWebhook(client, username, "subscribe")
 		}(channel.StreamName)
 	}
 	wg.Wait()
 
 	discord := createDiscordSession()
-	user, err := discord.User("@me")
 	errCheck("error retrieving account", err)
 
-	botID = user.ID
 	discord.AddHandler(func(discord *discordgo.Session, ready *discordgo.Ready) {
 		servers := discord.State.Guilds
 		log.Printf("PaintBot has started on %d servers\n", len(servers))
@@ -216,9 +231,18 @@ func validateToken() {
 	generateToken()
 }
 
-func handleNotification(w http.ResponseWriter, r *http.Request) {
+func handleRoot(w http.ResponseWriter, r *http.Request) (err error) {
+	w.Write([]byte("Hello bishes"))
+	return
+}
+func handleNotification(w http.ResponseWriter, r *http.Request) (err error) {
 	var twitchNotif notification
 	log.Printf("Handling notification: %v\n", r.URL)
+	if r.Header.Get("Twitch-Eventsub-Message-Type") == "webhook_callback_verification" {
+		//w.Write(r.Body.Get("challenge"))
+	} else {
+
+	}
 	challenge := r.URL.Query().Get("hub.challenge")
 	log.Printf("Challenge is: %v\n", challenge)
 
@@ -241,6 +265,7 @@ func handleNotification(w http.ResponseWriter, r *http.Request) {
 		log.Println("Webhook request body: ", twitchNotif)
 		go postNotification(twitchNotif)
 	}
+	return
 }
 
 func registerWebhook(client *http.Client, username string, subAction string) {
@@ -277,17 +302,56 @@ func registerWebhook(client *http.Client, username string, subAction string) {
 	log.Printf("Webhook returned: %s\n%s\n", resp.Status, string(body))
 }
 
-func renewWebhook(client *http.Client, username string, subAction string) {
-	time.Sleep(239 * time.Hour)
-	registerWebhook(client, username, subAction)
-}
-
 func startListen() {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/notify", handleNotification)
+	certManager := autocert.Manager{
+		Prompt:     autocert.AcceptTOS,
+		HostPolicy: autocert.HostWhitelist("paintbot.net"), //Your domain here
+		Cache:      autocert.DirCache("certs"),             //Folder for storing certificates
+		Email:      "jcav007@gmail.com",
+	}
 
-	log.Println("Listening on: :6969")
-	go http.ListenAndServe(":6969", mux)
+	server := &http.Server{
+		Addr: ":https",
+		TLSConfig: &tls.Config{
+			GetCertificate: certManager.GetCertificate,
+		},
+	}
+
+	var middleware = func(h Handler) Handler {
+		return func(w http.ResponseWriter, r *http.Request) (err error) {
+			// parse POST body, limit request size
+			if err = r.ParseForm(); err != nil {
+				log.Println("Something went wrong! Please try again.")
+				return
+			}
+
+			return h(w, r)
+		}
+	}
+
+	var errorHandling = func(handler func(w http.ResponseWriter, r *http.Request) error) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if err := handler(w, r); err != nil {
+				var errorString string = "Something went wrong! Please try again."
+				var errorCode int = 500
+
+				log.Println(err)
+				w.Write([]byte(errorString))
+				w.WriteHeader(errorCode)
+				return
+			}
+		})
+	}
+
+	var handleFunc = func(path string, handler Handler) {
+		http.Handle(path, errorHandling(middleware(handler)))
+	}
+	handleFunc("/", handleRoot)
+	handleFunc("/notify", handleNotification)
+
+	go http.ListenAndServe(":http", certManager.HTTPHandler(nil))
+
+	go log.Fatal(server.ListenAndServeTLS("", "")) //Key and cert are coming from Let's Encrypt
 }
 
 func getTwitchUser(userId string) twitchUser {
@@ -317,6 +381,35 @@ func getTwitchUser(userId string) twitchUser {
 
 	log.Println(users)
 	return users.Users[0]
+}
+
+func getTwitchChannel(userId string) twitchChannel {
+	var channels twitchChannelJSON
+
+	req, err := http.NewRequest("GET", "https://api.twitch.tv/helix/channels?broadcaster_id="+userId, nil)
+	req.Header.Add("Client-ID", config.Secrets.TwitchClientID)
+	req.Header.Add("Authorization", "Bearer "+twitchToken.AccessToken)
+	req.Header.Add("Content-type", "application/json")
+
+	validateToken()
+	resp, err := client.Do(req)
+	if err != nil {
+		panic(err)
+	}
+	defer resp.Body.Close()
+
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		panic(err)
+	}
+	err = json.Unmarshal(body, &channels)
+
+	if err != nil {
+		panic(err)
+	}
+
+	log.Println(channels)
+	return channels.Channel[0]
 }
 
 func getTwitchGame(id string) *twitchGame {
@@ -353,22 +446,24 @@ func postNotification(twitchNotif notification) {
 	log.Println("Posting notification")
 	user := getTwitchUser(twitchNotif.Event["broadcaster_user_id"])
 
+	channel := &streamInfo{}
+	for _, currChannel := range config.Streams {
+		if strings.EqualFold(currChannel.StreamName, twitchNotif.Event["broadcaster_user_name"]) {
+			channel = currChannel
+			break
+		}
+	}
+
+	twitchChannel := getTwitchChannel(twitchNotif.Event["broadcaster_user_id"])
+
 	var game *twitchGame
-	// if len(twitchNotif.GameID) > 0 {
-	// 	game = getTwitchGame(twitchNotif.GameID)
-	// }
+	if len(twitchChannel.GameID) > 0 {
+		game = getTwitchGame(twitchChannel.GameID)
+	}
 	if game == nil {
 		game = &twitchGame{
 			Name:   "N/A",
 			BoxArt: "https://images.igdb.com/igdb/image/upload/t_cover_big/nocover_qhhlj6.png",
-		}
-	}
-
-	channel := &streamInfo{}
-	for _, currChannel := range config.Streams {
-		if strings.ToLower(currChannel.StreamName) == strings.ToLower(twitchNotif.Event["broadcaster_user_name"]) {
-			channel = currChannel
-			break
 		}
 	}
 
@@ -400,7 +495,7 @@ func postNotification(twitchNotif notification) {
 			Thumbnail: &discordgo.MessageEmbedThumbnail{
 				URL: strings.Replace(strings.Replace(game.BoxArt, "{width}", "50", 1), "{height}", "70", 1),
 			},
-			Title: twitchNotif.Title,
+			Title: twitchChannel.Title,
 			URL:   "https://www.twitch.tv/" + twitchNotif.Event["broadcaster_user_name"],
 		},
 	}
@@ -412,7 +507,7 @@ func postNotification(twitchNotif notification) {
 	var msg *discordgo.Message
 	var err error
 	for i, channelID := range channel.Channels {
-		if lastNotify.Equal(newNotify) {
+		if channel.CurrentStreamID == twitchNotif.Event["id"] {
 			messageEdit := &discordgo.MessageEdit{
 				ID:      channelID.MessageID,
 				Channel: channelID.ChannelID,
