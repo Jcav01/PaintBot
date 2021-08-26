@@ -11,7 +11,6 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"golang.org/x/crypto/acme/autocert"
@@ -78,6 +77,10 @@ type notification struct {
 	SubscriptionInfo subscriptionInfo  `json:"subscription"`
 	Event            map[string]string `json:"event"`
 }
+type callbackVerification struct {
+	SubscriptionInfo subscriptionInfo `json:"subscription"`
+	Challenge        string           `json:"challenge"`
+}
 
 type twitchGame struct {
 	ID     string `json:"id"`
@@ -106,8 +109,6 @@ type secrets struct {
 	BotToken           string `json:"bot_token"`
 	TwitchClientID     string `json:"twitch_client_id"`
 	TwitchClientSecret string `json:"twitch_client_secret"`
-	CallbackURL        string `json:"callback_url"`
-	AdminId            string `json:"admin_id"`
 }
 
 type cofiguration struct {
@@ -136,22 +137,16 @@ func main() {
 	log.SetOutput(logFile)
 
 	loadConfig()
-	bytes, err := json.Marshal(config)
-	log.Println(string(bytes))
+	//bytes, err := json.Marshal(config)
+	//log.Println(string(bytes))
 	generateToken()
+	log.Println("Token Generated")
 	client = &http.Client{}
 
-	startListen()
+	go startListen()
 
-	var wg sync.WaitGroup
-	for _, channel := range config.Streams {
-		wg.Add(1)
-		go func(username string) {
-			defer wg.Done()
-			registerWebhook(client, username, "subscribe")
-		}(channel.StreamName)
-	}
-	wg.Wait()
+	log.Println(config.Streams[0].StreamName)
+	registerWebhook(client, config.Streams[0].StreamName)
 
 	discord := createDiscordSession()
 	errCheck("error retrieving account", err)
@@ -226,29 +221,36 @@ func validateToken() {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 200 && resp.StatusCode <= 299 {
+		log.Println("Token validated")
 		return
 	}
 	generateToken()
 }
 
 func handleRoot(w http.ResponseWriter, r *http.Request) (err error) {
-	w.Write([]byte("Hello bishes"))
+	w.Write([]byte("Hey bishes"))
 	return
 }
 func handleNotification(w http.ResponseWriter, r *http.Request) (err error) {
-	var twitchNotif notification
 	log.Printf("Handling notification: %v\n", r.URL)
-	if r.Header.Get("Twitch-Eventsub-Message-Type") == "webhook_callback_verification" {
-		//w.Write(r.Body.Get("challenge"))
-	} else {
-
+	if r.Method != "POST" {
+		log.Printf("Notification was not a POST: %v\n", r.Method)
+		w.WriteHeader(http.StatusBadRequest)
 	}
-	challenge := r.URL.Query().Get("hub.challenge")
-	log.Printf("Challenge is: %v\n", challenge)
+	messageType := r.Header.Get("Twitch-Eventsub-Message-Type")
+	if messageType == "webhook_callback_verification" {
+		body, err := ioutil.ReadAll(r.Body)
+		if err != nil {
+			panic(err)
+		}
+		var callbackVerification callbackVerification
+		err = json.Unmarshal(body, &callbackVerification)
 
-	if challenge != "" {
-		w.Write([]byte(challenge))
-	} else {
+		if err != nil {
+			panic(err)
+		}
+		w.Write([]byte(callbackVerification.Challenge))
+	} else if messageType == "stream.online" {
 		w.WriteHeader(http.StatusNoContent)
 		log.Printf("Responded to webhook\n")
 		defer r.Body.Close()
@@ -257,6 +259,7 @@ func handleNotification(w http.ResponseWriter, r *http.Request) (err error) {
 			log.Println(err)
 		}
 
+		var twitchNotif notification
 		err = json.Unmarshal(body, &twitchNotif)
 
 		if err != nil {
@@ -268,7 +271,8 @@ func handleNotification(w http.ResponseWriter, r *http.Request) (err error) {
 	return
 }
 
-func registerWebhook(client *http.Client, username string, subAction string) {
+func registerWebhook(client *http.Client, username string) {
+	log.Println("Getting user")
 	userid := getTwitchUser(username).ID
 	conditions := make(map[string]string)
 	conditions["broadcaster_user_id"] = userid
@@ -278,19 +282,20 @@ func registerWebhook(client *http.Client, username string, subAction string) {
 		Condition: conditions,
 		Transport: transport{
 			Method:   "webhook",
-			Callback: "https://bot.paintbot.net/notify",
-			Secret:   "",
+			Callback: "https://paintbot.net/notify",
+			Secret:   "ThisIsASecret",
 		},
 	}
 	body, _ := json.Marshal(createSubscription)
-	//log.Printf("Registering createSubscription: %s", string(body))
+	log.Printf("Registering createSubscription: %s\n", string(body))
+
+	validateToken()
 
 	req, err := http.NewRequest("POST", "https://api.twitch.tv/helix/eventsub/subscriptions", bytes.NewBuffer(body))
 	req.Header.Add("Client-ID", config.Secrets.TwitchClientID)
 	req.Header.Add("Authorization", "Bearer "+twitchToken.AccessToken)
 	req.Header.Add("Content-type", "application/json")
 
-	validateToken()
 	log.Println("Registering webhook")
 	resp, err := client.Do(req)
 	if err != nil {
@@ -357,7 +362,8 @@ func startListen() {
 func getTwitchUser(userId string) twitchUser {
 	var users twitchUserJSON
 
-	req, err := http.NewRequest("GET", "https://api.twitch.tv/helix/users?id="+userId, nil)
+	log.Println(userId)
+	req, err := http.NewRequest("GET", "https://api.twitch.tv/helix/users?login="+userId, nil)
 	req.Header.Add("Client-ID", config.Secrets.TwitchClientID)
 	req.Header.Add("Authorization", "Bearer "+twitchToken.AccessToken)
 	req.Header.Add("Content-type", "application/json")
@@ -444,7 +450,7 @@ func getTwitchGame(id string) *twitchGame {
 
 func postNotification(twitchNotif notification) {
 	log.Println("Posting notification")
-	user := getTwitchUser(twitchNotif.Event["broadcaster_user_id"])
+	user := getTwitchUser(twitchNotif.Event["broadcaster_user_login"])
 
 	channel := &streamInfo{}
 	for _, currChannel := range config.Streams {
