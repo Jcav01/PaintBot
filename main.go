@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"crypto/tls"
 	"encoding/json"
@@ -98,11 +97,15 @@ type discordChannel struct {
 
 type streamInfo struct {
 	StreamName      string           `json:"stream_name"`
+	TwitchUserId    string           `json:"twitch_user_id"`
 	Channels        []discordChannel `json:"discord_channel_ids"`
 	ColourString    string           `json:"colour"`
 	HighlightColour int64            `json:"highlight_colour"`
 	CurrentStreamID string           `json:"current_stream"`
 	Description     string           `json:"description"`
+	IsLive          bool             `json:"is_live"`
+	Category        string           `json:"category"`
+	Title           string           `json:"title"`
 }
 
 type secrets struct {
@@ -145,8 +148,15 @@ func main() {
 
 	go startListen()
 
-	log.Println(config.Streams[0].StreamName)
-	registerWebhook(client, config.Streams[0].StreamName)
+	for _, currChannel := range config.Streams {
+		log.Println(currChannel.StreamName)
+		if len(currChannel.TwitchUserId) < 1 {
+			currChannel.TwitchUserId = getTwitchUser(currChannel.StreamName).ID
+		}
+		registerWebhook(client, currChannel.TwitchUserId, "stream.online")
+		registerWebhook(client, currChannel.TwitchUserId, "stream.offline")
+		registerWebhook(client, currChannel.TwitchUserId, "channel.update")
+	}
 
 	discord := createDiscordSession()
 	errCheck("error retrieving account", err)
@@ -232,79 +242,65 @@ func handleRoot(w http.ResponseWriter, r *http.Request) (err error) {
 	return
 }
 func handleNotification(w http.ResponseWriter, r *http.Request) (err error) {
-	log.Printf("Handling notification: %v\n", r.URL)
+	log.Printf("Handling notification: %v\n", r.Method)
 	if r.Method != "POST" {
 		log.Printf("Notification was not a POST: %v\n", r.Method)
 		w.WriteHeader(http.StatusBadRequest)
+		return
 	}
-	messageType := r.Header.Get("Twitch-Eventsub-Message-Type")
-	if messageType == "webhook_callback_verification" {
-		body, err := ioutil.ReadAll(r.Body)
-		if err != nil {
-			panic(err)
-		}
+	if r.Header.Get("Twitch-Eventsub-Message-Type") == "webhook_callback_verification" {
+		body, _ := ioutil.ReadAll(r.Body)
+		// if err != nil {
+		// 	panic(err)
+		// }
 		var callbackVerification callbackVerification
-		err = json.Unmarshal(body, &callbackVerification)
+		_ = json.Unmarshal(body, &callbackVerification)
 
-		if err != nil {
-			panic(err)
-		}
+		// if err != nil {
+		// 	panic(err)
+		// }
 		w.Write([]byte(callbackVerification.Challenge))
-	} else if messageType == "stream.online" {
-		w.WriteHeader(http.StatusNoContent)
-		log.Printf("Responded to webhook\n")
-		defer r.Body.Close()
-		body, err := ioutil.ReadAll(r.Body)
-		if err != nil {
-			log.Println(err)
-		}
-
-		var twitchNotif notification
-		err = json.Unmarshal(body, &twitchNotif)
-
-		if err != nil {
-			log.Println(err)
-		}
-		log.Println("Webhook request body: ", twitchNotif)
-		go postNotification(twitchNotif)
+		return
 	}
-	return
-}
 
-func registerWebhook(client *http.Client, username string) {
-	log.Println("Getting user")
-	userid := getTwitchUser(username).ID
-	conditions := make(map[string]string)
-	conditions["broadcaster_user_id"] = userid
-	createSubscription := &createSubscription{
-		EventType: "stream.online",
-		Version:   "1",
-		Condition: conditions,
-		Transport: transport{
-			Method:   "webhook",
-			Callback: "https://paintbot.net/notify",
-			Secret:   "ThisIsASecret",
-		},
-	}
-	body, _ := json.Marshal(createSubscription)
-	log.Printf("Registering createSubscription: %s\n", string(body))
-
-	validateToken()
-
-	req, err := http.NewRequest("POST", "https://api.twitch.tv/helix/eventsub/subscriptions", bytes.NewBuffer(body))
-	req.Header.Add("Client-ID", config.Secrets.TwitchClientID)
-	req.Header.Add("Authorization", "Bearer "+twitchToken.AccessToken)
-	req.Header.Add("Content-type", "application/json")
-
-	log.Println("Registering webhook")
-	resp, err := client.Do(req)
+	w.WriteHeader(http.StatusNoContent)
+	log.Printf("Responded to webhook\n")
+	defer r.Body.Close()
+	body, err := ioutil.ReadAll(r.Body)
 	if err != nil {
-		log.Println("Panic at webhook POST")
-		panic(err)
+		log.Println(err)
 	}
-	defer resp.Body.Close()
-	body, _ = ioutil.ReadAll(resp.Body)
-	log.Printf("Webhook returned: %s\n%s\n", resp.Status, string(body))
+
+	var twitchNotif notification
+	err = json.Unmarshal(body, &twitchNotif)
+
+	if err != nil {
+		log.Println(err)
+	}
+	//log.Println("Webhook request body: ", twitchNotif)
+	channel := findChannel(twitchNotif.Event["broadcaster_user_name"])
+
+	if twitchNotif.SubscriptionInfo.Type == "stream.online" {
+		if len(channel.Title) == 0 {
+			twitchChannel := getTwitchChannel(channel.TwitchUserId)
+			channel.Title = twitchChannel.Title
+			channel.Category = twitchChannel.GameID
+		}
+		postNotification(channel)
+		channel.IsLive = true
+	} else if twitchNotif.SubscriptionInfo.Type == "stream.offline" {
+		channel.IsLive = false
+		writeConfig()
+	} else if twitchNotif.SubscriptionInfo.Type == "channel.update" {
+		channel.Title = twitchNotif.Event["title"]
+		channel.Category = twitchNotif.Event["category_id"]
+
+		if channel.IsLive {
+			go postNotification(channel)
+		}
+	}
+
+	return
 }
 
 func startListen() {
@@ -359,112 +355,13 @@ func startListen() {
 	go log.Fatal(server.ListenAndServeTLS("", "")) //Key and cert are coming from Let's Encrypt
 }
 
-func getTwitchUser(userId string) twitchUser {
-	var users twitchUserJSON
-
-	log.Println(userId)
-	req, err := http.NewRequest("GET", "https://api.twitch.tv/helix/users?login="+userId, nil)
-	req.Header.Add("Client-ID", config.Secrets.TwitchClientID)
-	req.Header.Add("Authorization", "Bearer "+twitchToken.AccessToken)
-	req.Header.Add("Content-type", "application/json")
-
-	validateToken()
-	resp, err := client.Do(req)
-	if err != nil {
-		panic(err)
-	}
-	defer resp.Body.Close()
-
-	body, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		panic(err)
-	}
-	err = json.Unmarshal(body, &users)
-
-	if err != nil {
-		panic(err)
-	}
-
-	log.Println(users)
-	return users.Users[0]
-}
-
-func getTwitchChannel(userId string) twitchChannel {
-	var channels twitchChannelJSON
-
-	req, err := http.NewRequest("GET", "https://api.twitch.tv/helix/channels?broadcaster_id="+userId, nil)
-	req.Header.Add("Client-ID", config.Secrets.TwitchClientID)
-	req.Header.Add("Authorization", "Bearer "+twitchToken.AccessToken)
-	req.Header.Add("Content-type", "application/json")
-
-	validateToken()
-	resp, err := client.Do(req)
-	if err != nil {
-		panic(err)
-	}
-	defer resp.Body.Close()
-
-	body, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		panic(err)
-	}
-	err = json.Unmarshal(body, &channels)
-
-	if err != nil {
-		panic(err)
-	}
-
-	log.Println(channels)
-	return channels.Channel[0]
-}
-
-func getTwitchGame(id string) *twitchGame {
-	var g twitchGameJSON
-
-	req, err := http.NewRequest("GET", "https://api.twitch.tv/helix/games?id="+id, nil)
-	req.Header.Add("Client-ID", config.Secrets.TwitchClientID)
-	req.Header.Add("Authorization", "Bearer "+twitchToken.AccessToken)
-	req.Header.Add("Content-type", "application/json")
-
-	validateToken()
-	resp, err := client.Do(req)
-	if err != nil {
-		panic(err)
-	}
-	defer resp.Body.Close()
-
-	body, err := ioutil.ReadAll(resp.Body)
-	if err != nil {
-		panic(err)
-	}
-
-	err = json.Unmarshal(body, &g)
-
-	if err != nil {
-		panic(err)
-	}
-
-	log.Println(g)
-	return &g.Games[0]
-}
-
-func postNotification(twitchNotif notification) {
+func postNotification(channel *streamInfo) {
 	log.Println("Posting notification")
-	user := getTwitchUser(twitchNotif.Event["broadcaster_user_login"])
-
-	channel := &streamInfo{}
-	for _, currChannel := range config.Streams {
-		if strings.EqualFold(currChannel.StreamName, twitchNotif.Event["broadcaster_user_name"]) {
-			channel = currChannel
-			break
-		}
-	}
-
-	twitchChannel := getTwitchChannel(twitchNotif.Event["broadcaster_user_id"])
+	user := getTwitchUser(channel.StreamName)
 
 	var game *twitchGame
-	if len(twitchChannel.GameID) > 0 {
-		game = getTwitchGame(twitchChannel.GameID)
+	if len(channel.Category) > 0 {
+		game = getTwitchGame(channel.Category)
 	}
 	if game == nil {
 		game = &twitchGame{
@@ -478,17 +375,12 @@ func postNotification(twitchNotif notification) {
 	message := &discordgo.MessageSend{
 		Embed: &discordgo.MessageEmbed{
 			Author: &discordgo.MessageEmbedAuthor{
-				URL:     "https://www.twitch.tv/" + twitchNotif.Event["broadcaster_user_name"],
-				Name:    twitchNotif.Event["broadcaster_user_name"],
+				URL:     "https://www.twitch.tv/" + channel.StreamName,
+				Name:    channel.StreamName,
 				IconURL: strings.Replace(strings.Replace(user.ProfileImage, "{width}", "70", 1), "{height}", "70", 1),
 			},
 			Color: int(channel.HighlightColour),
 			Fields: []*discordgo.MessageEmbedField{
-				// {
-				// 	Name:   "Viewers",
-				// 	Value:  strconv.Itoa(twitchNotif.ViewerCount),
-				// 	Inline: true,
-				// },
 				{
 					Name:   "Game",
 					Value:  game.Name,
@@ -496,13 +388,13 @@ func postNotification(twitchNotif notification) {
 				},
 			},
 			Image: &discordgo.MessageEmbedImage{
-				URL: "https://static-cdn.jtvnw.net/previews-ttv/live_user_" + twitchNotif.Event["broadcaster_user_name"] + "-320x180.png" + "?r=" + time.Now().Format(time.RFC3339),
+				URL: "https://static-cdn.jtvnw.net/previews-ttv/live_user_" + channel.StreamName + "-320x180.png" + "?r=" + time.Now().Format(time.RFC3339),
 			},
 			Thumbnail: &discordgo.MessageEmbedThumbnail{
 				URL: strings.Replace(strings.Replace(game.BoxArt, "{width}", "50", 1), "{height}", "70", 1),
 			},
-			Title: twitchChannel.Title,
-			URL:   "https://www.twitch.tv/" + twitchNotif.Event["broadcaster_user_name"],
+			Title: channel.Title,
+			URL:   "https://www.twitch.tv/" + channel.StreamName,
 		},
 	}
 
@@ -513,7 +405,7 @@ func postNotification(twitchNotif notification) {
 	var msg *discordgo.Message
 	var err error
 	for i, channelID := range channel.Channels {
-		if channel.CurrentStreamID == twitchNotif.Event["id"] {
+		if channel.IsLive {
 			messageEdit := &discordgo.MessageEdit{
 				ID:      channelID.MessageID,
 				Channel: channelID.ChannelID,
@@ -531,6 +423,7 @@ func postNotification(twitchNotif notification) {
 			channel.Channels[i].MessageID = msg.ID
 		}
 	}
+	writeConfig()
 }
 
 func writeConfig() {
@@ -545,4 +438,13 @@ func writeConfig() {
 		log.Fatal(err)
 	}
 	f.Write(bytes)
+}
+
+func findChannel(userName string) (channel *streamInfo) {
+	for _, currChannel := range config.Streams {
+		if strings.EqualFold(currChannel.StreamName, userName) {
+			return currChannel
+		}
+	}
+	return nil
 }
