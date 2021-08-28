@@ -391,7 +391,7 @@ func postNotification(channel *streamInfo) {
 				URL: "https://static-cdn.jtvnw.net/previews-ttv/live_user_" + channel.StreamName + "-320x180.png" + "?r=" + time.Now().Format(time.RFC3339),
 			},
 			Thumbnail: &discordgo.MessageEmbedThumbnail{
-				URL: strings.Replace(strings.Replace(game.BoxArt, "{width}", "50", 1), "{height}", "70", 1),
+				URL: strings.Replace(strings.Replace(game.BoxArt, "{width}", "500", 1), "{height}", "700", 1),
 			},
 			Title: channel.Title,
 			URL:   "https://www.twitch.tv/" + channel.StreamName,
