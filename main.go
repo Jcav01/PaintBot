@@ -90,6 +90,13 @@ type twitchGameJSON struct {
 	Games []twitchGame `json:"data"`
 }
 
+type twitchSubscription struct {
+	Total        int                `json:"total"`
+	Data         []subscriptionInfo `json:"data"`
+	TotalCost    int                `json:"total_cost"`
+	MaxTotalCost int                `json:"max_total_cost"`
+}
+
 type discordChannel struct {
 	ChannelID string `json:"id"`
 	MessageID string `json:"message_id"`
@@ -148,10 +155,27 @@ func main() {
 
 	go startListen()
 
+	subs := getSubscriptions("webhook_callback_verification_failed")
+
+	for _, subToDelete := range subs.Data {
+		deleteSubscription(subToDelete.ID)
+	}
+
+	enabledSubs := getSubscriptions("enabled")
 	for _, currChannel := range config.Streams {
 		log.Println(currChannel.StreamName)
 		if len(currChannel.TwitchUserId) < 1 {
 			currChannel.TwitchUserId = getTwitchUser(currChannel.StreamName).ID
+		}
+		subEnabled := false
+		for _, sub := range enabledSubs.Data {
+			if sub.Condition["broadcaster_user_id"] == currChannel.TwitchUserId {
+				subEnabled = true
+				break
+			}
+		}
+		if subEnabled {
+			continue
 		}
 		registerWebhook(client, currChannel.TwitchUserId, "stream.online")
 		registerWebhook(client, currChannel.TwitchUserId, "stream.offline")
@@ -165,6 +189,8 @@ func main() {
 		servers := discord.State.Guilds
 		log.Printf("PaintBot has started on %d servers\n", len(servers))
 	})
+
+	log.Println(getSubscriptions("enabled"))
 
 	err = discord.Open()
 	errCheck("Error opening connection to Discord", err)
@@ -277,7 +303,7 @@ func handleNotification(w http.ResponseWriter, r *http.Request) (err error) {
 	if err != nil {
 		log.Println(err)
 	}
-	//log.Println("Webhook request body: ", twitchNotif)
+	log.Println("Webhook notification for: ", twitchNotif.Event["broadcaster_user_name"], twitchNotif.SubscriptionInfo.Type)
 	channel := findChannel(twitchNotif.Event["broadcaster_user_name"])
 
 	if twitchNotif.SubscriptionInfo.Type == "stream.online" {

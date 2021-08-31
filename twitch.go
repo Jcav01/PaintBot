@@ -97,6 +97,46 @@ func getTwitchGame(id string) *twitchGame {
 	return &g.Games[0]
 }
 
+func getSubscriptions(status string) twitchSubscription {
+	var s twitchSubscription
+
+	req, err := http.NewRequest("GET", "https://api.twitch.tv/helix/eventsub/subscriptions?status="+status, nil)
+	req.Header.Add("Client-ID", config.Secrets.TwitchClientID)
+	req.Header.Add("Authorization", "Bearer "+twitchToken.AccessToken)
+
+	validateToken()
+	resp, err := client.Do(req)
+	if err != nil {
+		panic(err)
+	}
+	defer resp.Body.Close()
+
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		panic(err)
+	}
+
+	err = json.Unmarshal(body, &s)
+
+	if err != nil {
+		panic(err)
+	}
+
+	return s
+}
+
+func deleteSubscription(subID string) {
+	req, err := http.NewRequest("DELETE", "https://api.twitch.tv/helix/eventsub/subscriptions?id="+subID, nil)
+	req.Header.Add("Client-ID", config.Secrets.TwitchClientID)
+	req.Header.Add("Authorization", "Bearer "+twitchToken.AccessToken)
+
+	validateToken()
+	_, err = client.Do(req)
+	if err != nil {
+		panic(err)
+	}
+}
+
 func registerWebhook(client *http.Client, userId string, eventType string) {
 	conditions := make(map[string]string)
 	conditions["broadcaster_user_id"] = userId
@@ -127,6 +167,6 @@ func registerWebhook(client *http.Client, userId string, eventType string) {
 		panic(err)
 	}
 	defer resp.Body.Close()
-	body, _ = ioutil.ReadAll(resp.Body)
-	log.Printf("Webhook returned: %s\n%s\n", resp.Status, string(body))
+	// body, _ = ioutil.ReadAll(resp.Body)
+	log.Printf("Webhook returned: %s\n", resp.Status)
 }
