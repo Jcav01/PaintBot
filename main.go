@@ -113,6 +113,8 @@ type streamInfo struct {
 	IsLive          bool             `json:"is_live"`
 	Category        string           `json:"category"`
 	Title           string           `json:"title"`
+	OfflineTime     int64            `json:"offline_time"`
+	LastOffline     int64            `json:"last_offline"`
 }
 
 type secrets struct {
@@ -247,7 +249,7 @@ func generateToken() {
 }
 
 func validateToken() {
-	req, err := http.NewRequest("GET", "https://id.twitch.tv/oauth2/validate", nil)
+	req, _ := http.NewRequest("GET", "https://id.twitch.tv/oauth2/validate", nil)
 	req.Header.Add("Client-ID", config.Secrets.TwitchClientID)
 	req.Header.Add("Authorization", "Bearer "+twitchToken.AccessToken)
 
@@ -312,10 +314,16 @@ func handleNotification(w http.ResponseWriter, r *http.Request) (err error) {
 			channel.Title = twitchChannel.Title
 			channel.Category = twitchChannel.GameID
 		}
-		postNotification(channel)
+		onlineDate, _ := time.Parse(time.RFC3339, twitchNotif.Event["started_at"])
+
+		if onlineDate.Unix()-channel.LastOffline > channel.OfflineTime {
+			postNotification(channel)
+		}
 		channel.IsLive = true
 	} else if twitchNotif.SubscriptionInfo.Type == "stream.offline" {
 		channel.IsLive = false
+		offlineDate := time.Now()
+		channel.LastOffline = offlineDate.Unix()
 		writeConfig()
 	} else if twitchNotif.SubscriptionInfo.Type == "channel.update" {
 		channel.Title = twitchNotif.Event["title"]

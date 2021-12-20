@@ -12,7 +12,7 @@ func getTwitchUser(userId string) twitchUser {
 	var users twitchUserJSON
 
 	log.Println(userId)
-	req, err := http.NewRequest("GET", "https://api.twitch.tv/helix/users?login="+userId, nil)
+	req, _ := http.NewRequest("GET", "https://api.twitch.tv/helix/users?login="+userId, nil)
 	req.Header.Add("Client-ID", config.Secrets.TwitchClientID)
 	req.Header.Add("Authorization", "Bearer "+twitchToken.AccessToken)
 	req.Header.Add("Content-type", "application/json")
@@ -41,7 +41,7 @@ func getTwitchUser(userId string) twitchUser {
 func getTwitchChannel(userId string) twitchChannel {
 	var channels twitchChannelJSON
 
-	req, err := http.NewRequest("GET", "https://api.twitch.tv/helix/channels?broadcaster_id="+userId, nil)
+	req, _ := http.NewRequest("GET", "https://api.twitch.tv/helix/channels?broadcaster_id="+userId, nil)
 	req.Header.Add("Client-ID", config.Secrets.TwitchClientID)
 	req.Header.Add("Authorization", "Bearer "+twitchToken.AccessToken)
 	req.Header.Add("Content-type", "application/json")
@@ -70,7 +70,7 @@ func getTwitchChannel(userId string) twitchChannel {
 func getTwitchGame(id string) *twitchGame {
 	var g twitchGameJSON
 
-	req, err := http.NewRequest("GET", "https://api.twitch.tv/helix/games?id="+id, nil)
+	req, _ := http.NewRequest("GET", "https://api.twitch.tv/helix/games?id="+id, nil)
 	req.Header.Add("Client-ID", config.Secrets.TwitchClientID)
 	req.Header.Add("Authorization", "Bearer "+twitchToken.AccessToken)
 	req.Header.Add("Content-type", "application/json")
@@ -100,7 +100,7 @@ func getTwitchGame(id string) *twitchGame {
 func getSubscriptions(status string) twitchSubscription {
 	var s twitchSubscription
 
-	req, err := http.NewRequest("GET", "https://api.twitch.tv/helix/eventsub/subscriptions?status="+status, nil)
+	req, _ := http.NewRequest("GET", "https://api.twitch.tv/helix/eventsub/subscriptions?status="+status, nil)
 	req.Header.Add("Client-ID", config.Secrets.TwitchClientID)
 	req.Header.Add("Authorization", "Bearer "+twitchToken.AccessToken)
 
@@ -126,15 +126,16 @@ func getSubscriptions(status string) twitchSubscription {
 }
 
 func deleteSubscription(subID string) {
-	req, err := http.NewRequest("DELETE", "https://api.twitch.tv/helix/eventsub/subscriptions?id="+subID, nil)
+	req, _ := http.NewRequest("DELETE", "https://api.twitch.tv/helix/eventsub/subscriptions?id="+subID, nil)
 	req.Header.Add("Client-ID", config.Secrets.TwitchClientID)
 	req.Header.Add("Authorization", "Bearer "+twitchToken.AccessToken)
 
 	validateToken()
-	_, err = client.Do(req)
+	_, err := client.Do(req)
 	if err != nil {
 		panic(err)
 	}
+
 }
 
 func registerWebhook(client *http.Client, userId string, eventType string) {
@@ -155,7 +156,7 @@ func registerWebhook(client *http.Client, userId string, eventType string) {
 
 	validateToken()
 
-	req, err := http.NewRequest("POST", "https://api.twitch.tv/helix/eventsub/subscriptions", bytes.NewBuffer(body))
+	req, _ := http.NewRequest("POST", "https://api.twitch.tv/helix/eventsub/subscriptions", bytes.NewBuffer(body))
 	req.Header.Add("Client-ID", config.Secrets.TwitchClientID)
 	req.Header.Add("Authorization", "Bearer "+twitchToken.AccessToken)
 	req.Header.Add("Content-type", "application/json")
