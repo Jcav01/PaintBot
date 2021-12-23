@@ -321,9 +321,12 @@ func handleNotification(w http.ResponseWriter, r *http.Request) (err error) {
 		}
 		channel.IsLive = true
 	} else if twitchNotif.SubscriptionInfo.Type == "stream.offline" {
+		if !channel.IsLive {
+			log.Println("Channel is already offline, ignoring notification")
+			return
+		}
 		channel.IsLive = false
-		offlineDate := time.Now()
-		channel.LastOffline = offlineDate.Unix()
+		channel.LastOffline = time.Now().Unix()
 		writeConfig()
 	} else if twitchNotif.SubscriptionInfo.Type == "channel.update" {
 		channel.Title = twitchNotif.Event["title"]
@@ -368,11 +371,11 @@ func startListen() {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if err := handler(w, r); err != nil {
 				var errorString string = "Something went wrong! Please try again."
-				var errorCode int = 500
+				//var errorCode int = 500
 
 				log.Println(err)
 				w.Write([]byte(errorString))
-				w.WriteHeader(errorCode)
+				//w.WriteHeader(errorCode)
 				return
 			}
 		})
