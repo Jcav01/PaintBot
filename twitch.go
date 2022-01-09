@@ -138,7 +138,7 @@ func deleteSubscription(subID string) {
 
 }
 
-func registerWebhook(client *http.Client, userId string, eventType string) {
+func registerTwitchWebhook(client *http.Client, userId string, eventType string) {
 	conditions := make(map[string]string)
 	conditions["broadcaster_user_id"] = userId
 	createSubscription := &createSubscription{

@@ -86,7 +86,7 @@ type discordChannel struct {
 
 type streamInfo struct {
 	StreamName      string           `json:"stream_name"`
-	TwitchUserId    string           `json:"twitch_user_id"`
+	UserId          string           `json:"twitch_user_id"`
 	Channels        []discordChannel `json:"discord_channel_ids"`
 	ColourString    string           `json:"colour"`
 	HighlightColour int64            `json:"highlight_colour"`
@@ -97,6 +97,8 @@ type streamInfo struct {
 	Title           string           `json:"title"`
 	OfflineTime     int64            `json:"offline_time"`
 	LastOffline     int64            `json:"last_offline"`
+	Type            int              `json:"type"`
+	VideoIds        []string         `json:"video_ids"`
 }
 
 type secrets struct {
@@ -110,4 +112,16 @@ type cofiguration struct {
 	Streams []*streamInfo `json:"streams"`
 }
 
+type hub struct {
+	Mode         string `json:"hub.mode"`
+	Topic        string `json:"hub.topic"`
+	Callback     string `json:"hub.callback"`
+	LeaseSeconds int    `json:"hub.lease_seconds"`
+}
+
 type Handler func(http.ResponseWriter, *http.Request) error
+
+const (
+	twitchType  = 1
+	youtubeType = 2
+)

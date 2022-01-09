@@ -54,24 +54,28 @@ func main() {
 	}
 
 	enabledSubs := getSubscriptions("enabled")
-	for _, currChannel := range config.Streams {
-		log.Println(currChannel.StreamName)
-		if len(currChannel.TwitchUserId) < 1 {
-			currChannel.TwitchUserId = getTwitchUser(currChannel.StreamName).ID
-		}
-		subEnabled := false
-		for _, sub := range enabledSubs.Data {
-			if sub.Condition["broadcaster_user_id"] == currChannel.TwitchUserId {
-				subEnabled = true
-				break
+	for _, currStream := range config.Streams {
+		if currStream.Type == twitchType {
+			log.Println(currStream.StreamName)
+			if len(currStream.UserId) < 1 {
+				currStream.UserId = getTwitchUser(currStream.StreamName).ID
 			}
+			subEnabled := false
+			for _, sub := range enabledSubs.Data {
+				if sub.Condition["broadcaster_user_id"] == currStream.UserId {
+					subEnabled = true
+					break
+				}
+			}
+			if subEnabled {
+				continue
+			}
+			registerTwitchWebhook(client, currStream.UserId, "stream.online")
+			registerTwitchWebhook(client, currStream.UserId, "stream.offline")
+			registerTwitchWebhook(client, currStream.UserId, "channel.update")
+		} else if currStream.Type == youtubeType {
+			setupYouTubeNotification(currStream)
 		}
-		if subEnabled {
-			continue
-		}
-		registerWebhook(client, currChannel.TwitchUserId, "stream.online")
-		registerWebhook(client, currChannel.TwitchUserId, "stream.offline")
-		registerWebhook(client, currChannel.TwitchUserId, "channel.update")
 	}
 
 	discord := createDiscordSession()
@@ -115,12 +119,14 @@ func loadConfig() {
 	json.Unmarshal(content, &config)
 
 	for _, channel := range config.Streams {
-		colour, err := strconv.ParseInt(channel.ColourString, 0, 64)
-		if err != nil {
-			log.Fatal(err)
-			return
+		if channel.Type == twitchType {
+			colour, err := strconv.ParseInt(channel.ColourString, 0, 64)
+			if err != nil {
+				log.Fatal(err)
+				return
+			}
+			channel.HighlightColour = colour
 		}
-		channel.HighlightColour = colour
 	}
 }
 
@@ -196,11 +202,11 @@ func handleTwitchNotification(w http.ResponseWriter, r *http.Request) (err error
 		log.Println(err)
 	}
 	log.Println("Webhook notification for: ", twitchNotif.Event["broadcaster_user_name"], twitchNotif.SubscriptionInfo.Type)
-	channel := findChannel(twitchNotif.Event["broadcaster_user_name"])
+	channel := findChannel(twitchNotif.Event["broadcaster_user_name"], twitchType)
 
 	if twitchNotif.SubscriptionInfo.Type == "stream.online" {
 		if len(channel.Title) == 0 {
-			twitchChannel := getTwitchChannel(channel.TwitchUserId)
+			twitchChannel := getTwitchChannel(channel.UserId)
 			channel.Title = twitchChannel.Title
 			channel.Category = twitchChannel.GameID
 		}
@@ -365,9 +371,9 @@ func writeConfig() {
 	f.Write(bytes)
 }
 
-func findChannel(userName string) (channel *streamInfo) {
+func findChannel(name string, channelType int) (channel *streamInfo) {
 	for _, currChannel := range config.Streams {
-		if strings.EqualFold(currChannel.StreamName, userName) {
+		if (strings.EqualFold(currChannel.StreamName, name) || strings.EqualFold(currChannel.UserId, name)) && currChannel.Type == channelType {
 			return currChannel
 		}
 	}
