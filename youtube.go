@@ -71,7 +71,7 @@ func handleYoutubeNotification(w http.ResponseWriter, r *http.Request) (err erro
 			return
 		}
 
-		if feed.Entries[0].PublishedParsed.After(time.Now().UTC().Add(-24 * time.Hour)) {
+		if feed.Entries[0].PublishedParsed.Before(time.Now().UTC().Add(-24 * time.Hour)) {
 			log.Printf("Video is older than 24 hours\n")
 			return
 		}
