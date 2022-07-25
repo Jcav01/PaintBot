@@ -20,116 +20,6 @@ import (
 	"golang.org/x/oauth2/twitch"
 )
 
-type createSubscription struct {
-	EventType string            `json:"type"`
-	Version   string            `json:"version"`
-	Condition map[string]string `json:"condition"`
-	Transport transport         `json:"transport"`
-}
-type transport struct {
-	Method   string `json:"method"`
-	Callback string `json:"callback"`
-	Secret   string `json:"secret"`
-}
-
-type twitchUser struct {
-	ID              string `json:"id"`
-	Login           string `json:"login"`
-	DisplayName     string `json:"display_name"`
-	UserType        string `json:"type"`
-	BroadcasterType string `json:"broadcaster_type"`
-	Description     string `json:"description"`
-	ProfileImage    string `json:"profile_image_url"`
-	OfflineImage    string `json:"offline_image_url"`
-	ViewCount       int    `json:"view_count"`
-	Email           string `json:"email"`
-}
-type twitchUserJSON struct {
-	Users []twitchUser `json:"data"`
-}
-
-type twitchChannel struct {
-	ID          string `json:"broadcaster_id"`
-	Login       string `json:"broadcaster_login"`
-	DisplayName string `json:"broadcaster_name"`
-	Language    string `json:"broadcaster_language"`
-	GameID      string `json:"game_id"`
-	GameName    string `json:"game_name"`
-	Title       string `json:"title"`
-	Delay       int    `json:"delay"`
-}
-type twitchChannelJSON struct {
-	Channel []twitchChannel `json:"data"`
-}
-
-type subscriptionInfo struct {
-	ID        string            `json:"id"`
-	Status    string            `json:"status"`
-	Type      string            `json:"type"`
-	Version   string            `json:"version"`
-	Cost      int               `json:"cost"`
-	Condition map[string]string `json:"condition"`
-	Transport map[string]string `json:"transport"`
-	CreatedAt string            `json:"created_at"`
-}
-type notification struct {
-	SubscriptionInfo subscriptionInfo  `json:"subscription"`
-	Event            map[string]string `json:"event"`
-}
-type callbackVerification struct {
-	SubscriptionInfo subscriptionInfo `json:"subscription"`
-	Challenge        string           `json:"challenge"`
-}
-
-type twitchGame struct {
-	ID     string `json:"id"`
-	Name   string `json:"name"`
-	BoxArt string `json:"box_art_url"`
-}
-type twitchGameJSON struct {
-	Games []twitchGame `json:"data"`
-}
-
-type twitchSubscription struct {
-	Total        int                `json:"total"`
-	Data         []subscriptionInfo `json:"data"`
-	TotalCost    int                `json:"total_cost"`
-	MaxTotalCost int                `json:"max_total_cost"`
-}
-
-type discordChannel struct {
-	ChannelID string `json:"id"`
-	MessageID string `json:"message_id"`
-}
-
-type streamInfo struct {
-	StreamName      string           `json:"stream_name"`
-	TwitchUserId    string           `json:"twitch_user_id"`
-	Channels        []discordChannel `json:"discord_channel_ids"`
-	ColourString    string           `json:"colour"`
-	HighlightColour int64            `json:"highlight_colour"`
-	CurrentStreamID string           `json:"current_stream"`
-	Description     string           `json:"description"`
-	IsLive          bool             `json:"is_live"`
-	Category        string           `json:"category"`
-	Title           string           `json:"title"`
-	OfflineTime     int64            `json:"offline_time"`
-	LastOffline     int64            `json:"last_offline"`
-}
-
-type secrets struct {
-	BotToken           string `json:"bot_token"`
-	TwitchClientID     string `json:"twitch_client_id"`
-	TwitchClientSecret string `json:"twitch_client_secret"`
-}
-
-type cofiguration struct {
-	Secrets secrets       `json:"secrets"`
-	Streams []*streamInfo `json:"streams"`
-}
-
-type Handler func(http.ResponseWriter, *http.Request) error
-
 var (
 	twitchToken  *oauth2.Token
 	oauth2Config *clientcredentials.Config
@@ -164,24 +54,28 @@ func main() {
 	}
 
 	enabledSubs := getSubscriptions("enabled")
-	for _, currChannel := range config.Streams {
-		log.Println(currChannel.StreamName)
-		if len(currChannel.TwitchUserId) < 1 {
-			currChannel.TwitchUserId = getTwitchUser(currChannel.StreamName).ID
-		}
-		subEnabled := false
-		for _, sub := range enabledSubs.Data {
-			if sub.Condition["broadcaster_user_id"] == currChannel.TwitchUserId {
-				subEnabled = true
-				break
+	for _, currStream := range config.Streams {
+		if currStream.Type == twitchType {
+			log.Println(currStream.StreamName)
+			if len(currStream.UserId) < 1 {
+				currStream.UserId = getTwitchUser(currStream.StreamName).ID
 			}
+			subEnabled := false
+			for _, sub := range enabledSubs.Data {
+				if sub.Condition["broadcaster_user_id"] == currStream.UserId {
+					subEnabled = true
+					break
+				}
+			}
+			if subEnabled {
+				continue
+			}
+			registerTwitchWebhook(client, currStream.UserId, "stream.online")
+			registerTwitchWebhook(client, currStream.UserId, "stream.offline")
+			registerTwitchWebhook(client, currStream.UserId, "channel.update")
+		} else if currStream.Type == youtubeType {
+			setupYouTubeNotification(currStream)
 		}
-		if subEnabled {
-			continue
-		}
-		registerWebhook(client, currChannel.TwitchUserId, "stream.online")
-		registerWebhook(client, currChannel.TwitchUserId, "stream.offline")
-		registerWebhook(client, currChannel.TwitchUserId, "channel.update")
 	}
 
 	discord := createDiscordSession()
@@ -225,12 +119,14 @@ func loadConfig() {
 	json.Unmarshal(content, &config)
 
 	for _, channel := range config.Streams {
-		colour, err := strconv.ParseInt(channel.ColourString, 0, 64)
-		if err != nil {
-			log.Fatal(err)
-			return
+		if channel.Type == twitchType {
+			colour, err := strconv.ParseInt(channel.ColourString, 0, 64)
+			if err != nil {
+				log.Fatal(err)
+				return
+			}
+			channel.HighlightColour = colour
 		}
-		channel.HighlightColour = colour
 	}
 }
 
@@ -269,7 +165,7 @@ func handleRoot(w http.ResponseWriter, r *http.Request) (err error) {
 	w.Write([]byte("Hey bishes"))
 	return
 }
-func handleNotification(w http.ResponseWriter, r *http.Request) (err error) {
+func handleTwitchNotification(w http.ResponseWriter, r *http.Request) (err error) {
 	log.Printf("Handling notification: %v\n", r.Method)
 	if r.Method != "POST" {
 		log.Printf("Notification was not a POST: %v\n", r.Method)
@@ -306,11 +202,11 @@ func handleNotification(w http.ResponseWriter, r *http.Request) (err error) {
 		log.Println(err)
 	}
 	log.Println("Webhook notification for: ", twitchNotif.Event["broadcaster_user_name"], twitchNotif.SubscriptionInfo.Type)
-	channel := findChannel(twitchNotif.Event["broadcaster_user_name"])
+	channel := findChannel(twitchNotif.Event["broadcaster_user_name"], twitchType)
 
 	if twitchNotif.SubscriptionInfo.Type == "stream.online" {
 		if len(channel.Title) == 0 {
-			twitchChannel := getTwitchChannel(channel.TwitchUserId)
+			twitchChannel := getTwitchChannel(channel.UserId)
 			channel.Title = twitchChannel.Title
 			channel.Category = twitchChannel.GameID
 		}
@@ -385,7 +281,8 @@ func startListen() {
 		http.Handle(path, errorHandling(middleware(handler)))
 	}
 	handleFunc("/", handleRoot)
-	handleFunc("/notify", handleNotification)
+	handleFunc("/notify", handleTwitchNotification)
+	handleFunc("/youtube", handleYoutubeNotification)
 
 	go http.ListenAndServe(":http", certManager.HTTPHandler(nil))
 
@@ -477,9 +374,9 @@ func writeConfig() {
 	f.Write(bytes)
 }
 
-func findChannel(userName string) (channel *streamInfo) {
+func findChannel(name string, channelType int) (channel *streamInfo) {
 	for _, currChannel := range config.Streams {
-		if strings.EqualFold(currChannel.StreamName, userName) {
+		if (strings.EqualFold(currChannel.StreamName, name) || strings.EqualFold(currChannel.UserId, name)) && currChannel.Type == channelType {
 			return currChannel
 		}
 	}
