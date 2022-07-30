@@ -147,7 +147,7 @@ func registerTwitchWebhook(client *http.Client, userId string, eventType string)
 		Condition: conditions,
 		Transport: transport{
 			Method:   "webhook",
-			Callback: "https://paintbot.net/notify",
+			Callback: "https://" + config.Secrets.BaseUrl + "/notify",
 			Secret:   "ThisIsASecret",
 		},
 	}

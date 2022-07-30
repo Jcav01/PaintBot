@@ -239,8 +239,8 @@ func handleTwitchNotification(w http.ResponseWriter, r *http.Request) (err error
 func startListen() {
 	certManager := autocert.Manager{
 		Prompt:     autocert.AcceptTOS,
-		HostPolicy: autocert.HostWhitelist("paintbot.net"), //Your domain here
-		Cache:      autocert.DirCache("certs"),             //Folder for storing certificates
+		HostPolicy: autocert.HostWhitelist(config.Secrets.BaseUrl), //Your domain here
+		Cache:      autocert.DirCache("certs"),                     //Folder for storing certificates
 		Email:      "jcav007@gmail.com",
 	}
 

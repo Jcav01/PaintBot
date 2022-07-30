@@ -105,6 +105,7 @@ type secrets struct {
 	BotToken           string `json:"bot_token"`
 	TwitchClientID     string `json:"twitch_client_id"`
 	TwitchClientSecret string `json:"twitch_client_secret"`
+	BaseUrl            string `json:"url"`
 }
 
 type cofiguration struct {

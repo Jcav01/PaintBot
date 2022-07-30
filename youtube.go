@@ -14,7 +14,7 @@ import (
 
 func setupYouTubeNotification(channel *streamInfo) {
 	hub := &hub{
-		Callback:     "https://paintbot.net/youtube",
+		Callback:     "https://" + config.Secrets.BaseUrl + "/youtube",
 		Mode:         "subscribe",
 		Topic:        "https://www.youtube.com/xml/feeds/videos.xml?channel_id=" + channel.UserId,
 		LeaseSeconds: 604800,
