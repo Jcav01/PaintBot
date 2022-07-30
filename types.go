@@ -99,6 +99,7 @@ type streamInfo struct {
 	LastOffline     int64            `json:"last_offline"`
 	Type            int              `json:"type"`
 	VideoIds        []string         `json:"video_ids"`
+	DisableOffline  bool             `json:"disable_offline"`
 }
 
 type secrets struct {

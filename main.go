@@ -212,7 +212,7 @@ func handleTwitchNotification(w http.ResponseWriter, r *http.Request) (err error
 		}
 		onlineDate, _ := time.Parse(time.RFC3339, twitchNotif.Event["started_at"])
 
-		if onlineDate.Unix()-channel.LastOffline > channel.OfflineTime {
+		if channel.DisableOffline || onlineDate.Unix()-channel.LastOffline > channel.OfflineTime {
 			postNotification(channel)
 		}
 		channel.IsLive = true
