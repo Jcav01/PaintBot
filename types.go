@@ -55,8 +55,8 @@ type subscriptionInfo struct {
 	CreatedAt string            `json:"created_at"`
 }
 type notification struct {
-	SubscriptionInfo subscriptionInfo  `json:"subscription"`
-	Event            map[string]string `json:"event"`
+	SubscriptionInfo subscriptionInfo `json:"subscription"`
+	Event            map[string]any   `json:"event"`
 }
 type callbackVerification struct {
 	SubscriptionInfo subscriptionInfo `json:"subscription"`

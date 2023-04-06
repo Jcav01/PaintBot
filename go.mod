@@ -1,10 +1,26 @@
 module PaintBot
 
-go 1.16
+go 1.18
 
 require (
-	github.com/bwmarrin/discordgo v0.23.2
-	github.com/mmcdole/gofeed v1.1.3
-	golang.org/x/crypto v0.0.0-20211215153901-e495a2d5b3d3
-	golang.org/x/oauth2 v0.0.0-20211104180415-d3ed0bb246c8
+	github.com/bwmarrin/discordgo v0.27.1
+	github.com/mmcdole/gofeed v1.2.1
+	golang.org/x/crypto v0.7.0
+	golang.org/x/oauth2 v0.6.0
+)
+
+require (
+	github.com/PuerkitoBio/goquery v1.8.1 // indirect
+	github.com/andybalholm/cascadia v1.3.1 // indirect
+	github.com/golang/protobuf v1.5.3 // indirect
+	github.com/gorilla/websocket v1.5.0 // indirect
+	github.com/json-iterator/go v1.1.12 // indirect
+	github.com/mmcdole/goxpp v1.1.0 // indirect
+	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
+	github.com/modern-go/reflect2 v1.0.2 // indirect
+	golang.org/x/net v0.8.0 // indirect
+	golang.org/x/sys v0.7.0 // indirect
+	golang.org/x/text v0.8.0 // indirect
+	google.golang.org/appengine v1.6.7 // indirect
+	google.golang.org/protobuf v1.30.0 // indirect
 )

@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"crypto/tls"
 	"encoding/json"
 	"io/ioutil"
 	"log"
@@ -12,7 +11,6 @@ import (
 	"strings"
 	"time"
 
-	"golang.org/x/crypto/acme/autocert"
 	"golang.org/x/oauth2"
 
 	"github.com/bwmarrin/discordgo"
@@ -175,13 +173,13 @@ func handleTwitchNotification(w http.ResponseWriter, r *http.Request) (err error
 	if r.Header.Get("Twitch-Eventsub-Message-Type") == "webhook_callback_verification" {
 		body, _ := ioutil.ReadAll(r.Body)
 		// if err != nil {
-		// 	panic(err)
+		//      panic(err)
 		// }
 		var callbackVerification callbackVerification
 		_ = json.Unmarshal(body, &callbackVerification)
 
 		// if err != nil {
-		// 	panic(err)
+		//      panic(err)
 		// }
 		w.Write([]byte(callbackVerification.Challenge))
 		return
@@ -202,7 +200,7 @@ func handleTwitchNotification(w http.ResponseWriter, r *http.Request) (err error
 		log.Println(err)
 	}
 	log.Println("Webhook notification for: ", twitchNotif.Event["broadcaster_user_name"], twitchNotif.SubscriptionInfo.Type)
-	channel := findChannel(twitchNotif.Event["broadcaster_user_name"], twitchType)
+	channel := findChannel(twitchNotif.Event["broadcaster_user_name"].(string), twitchType)
 
 	if twitchNotif.SubscriptionInfo.Type == "stream.online" {
 		if len(channel.Title) == 0 {
@@ -210,7 +208,7 @@ func handleTwitchNotification(w http.ResponseWriter, r *http.Request) (err error
 			channel.Title = twitchChannel.Title
 			channel.Category = twitchChannel.GameID
 		}
-		onlineDate, _ := time.Parse(time.RFC3339, twitchNotif.Event["started_at"])
+		onlineDate, _ := time.Parse(time.RFC3339, twitchNotif.Event["started_at"].(string))
 
 		if channel.DisableOffline || onlineDate.Unix()-channel.LastOffline > channel.OfflineTime {
 			postNotification(channel)
@@ -225,8 +223,8 @@ func handleTwitchNotification(w http.ResponseWriter, r *http.Request) (err error
 		channel.LastOffline = time.Now().Unix()
 		writeConfig()
 	} else if twitchNotif.SubscriptionInfo.Type == "channel.update" {
-		channel.Title = twitchNotif.Event["title"]
-		channel.Category = twitchNotif.Event["category_id"]
+		channel.Title = twitchNotif.Event["title"].(string)
+		channel.Category = twitchNotif.Event["category_id"].(string)
 
 		if channel.IsLive {
 			go postNotification(channel)
@@ -237,20 +235,6 @@ func handleTwitchNotification(w http.ResponseWriter, r *http.Request) (err error
 }
 
 func startListen() {
-	certManager := autocert.Manager{
-		Prompt:     autocert.AcceptTOS,
-		HostPolicy: autocert.HostWhitelist(config.Secrets.BaseUrl), //Your domain here
-		Cache:      autocert.DirCache("certs"),                     //Folder for storing certificates
-		Email:      "jcav007@gmail.com",
-	}
-
-	server := &http.Server{
-		Addr: ":https",
-		TLSConfig: &tls.Config{
-			GetCertificate: certManager.GetCertificate,
-		},
-	}
-
 	var middleware = func(h Handler) Handler {
 		return func(w http.ResponseWriter, r *http.Request) (err error) {
 			// parse POST body, limit request size
@@ -284,9 +268,7 @@ func startListen() {
 	handleFunc("/notify", handleTwitchNotification)
 	handleFunc("/youtube", handleYoutubeNotification)
 
-	go http.ListenAndServe(":http", certManager.HTTPHandler(nil))
-
-	go log.Fatal(server.ListenAndServeTLS("", "")) //Key and cert are coming from Let's Encrypt
+	go log.Fatal(http.ListenAndServe(":8080", nil))
 }
 
 func postNotification(channel *streamInfo) {
@@ -303,33 +285,34 @@ func postNotification(channel *streamInfo) {
 			BoxArt: "https://images.igdb.com/igdb/image/upload/t_cover_big/nocover_qhhlj6.png",
 		}
 	}
+	embed := &discordgo.MessageEmbed{
+		Author: &discordgo.MessageEmbedAuthor{
+			URL:     "https://www.twitch.tv/" + channel.StreamName,
+			Name:    channel.StreamName,
+			IconURL: strings.Replace(strings.Replace(user.ProfileImage, "{width}", "70", 1), "{height}", "70", 1),
+		},
+		Color: int(channel.HighlightColour),
+		Fields: []*discordgo.MessageEmbedField{
+			{
+				Name:   "Game",
+				Value:  game.Name,
+				Inline: true,
+			},
+		},
+		Image: &discordgo.MessageEmbedImage{
+			URL: "https://static-cdn.jtvnw.net/previews-ttv/live_user_" + channel.StreamName + "-320x180.png" + "?r=" + time.Now().Format(time.RFC3339),
+		},
+		Thumbnail: &discordgo.MessageEmbedThumbnail{
+			URL: strings.Replace(strings.Replace(game.BoxArt, "{width}", "500", 1), "{height}", "700", 1),
+		},
+		Title: channel.Title,
+		URL:   "https://www.twitch.tv/" + channel.StreamName,
+	}
 
 	discord := createDiscordSession()
 	defer discord.Close()
 	message := &discordgo.MessageSend{
-		Embed: &discordgo.MessageEmbed{
-			Author: &discordgo.MessageEmbedAuthor{
-				URL:     "https://www.twitch.tv/" + channel.StreamName,
-				Name:    channel.StreamName,
-				IconURL: strings.Replace(strings.Replace(user.ProfileImage, "{width}", "70", 1), "{height}", "70", 1),
-			},
-			Color: int(channel.HighlightColour),
-			Fields: []*discordgo.MessageEmbedField{
-				{
-					Name:   "Game",
-					Value:  game.Name,
-					Inline: true,
-				},
-			},
-			Image: &discordgo.MessageEmbedImage{
-				URL: "https://static-cdn.jtvnw.net/previews-ttv/live_user_" + channel.StreamName + "-320x180.png" + "?r=" + time.Now().Format(time.RFC3339),
-			},
-			Thumbnail: &discordgo.MessageEmbedThumbnail{
-				URL: strings.Replace(strings.Replace(game.BoxArt, "{width}", "500", 1), "{height}", "700", 1),
-			},
-			Title: channel.Title,
-			URL:   "https://www.twitch.tv/" + channel.StreamName,
-		},
+		Embeds: []*discordgo.MessageEmbed{embed},
 	}
 
 	if channel.Description != "" {
@@ -344,7 +327,7 @@ func postNotification(channel *streamInfo) {
 				ID:      channelID.MessageID,
 				Channel: channelID.ChannelID,
 				Content: &message.Content,
-				Embed:   message.Embed,
+				Embeds:  message.Embeds,
 			}
 			msg, err = discord.ChannelMessageEditComplex(messageEdit)
 		} else {
