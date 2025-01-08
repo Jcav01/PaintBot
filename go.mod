@@ -15,7 +15,7 @@ require (
 	github.com/gorilla/websocket v1.5.0 // indirect
 	github.com/mmcdole/goxpp v1.1.0 // indirect
 	golang.org/x/crypto v0.31.0 // indirect
-	golang.org/x/net v0.23.0 // indirect
+	golang.org/x/net v0.33.0 // indirect
 	golang.org/x/sys v0.28.0 // indirect
 	golang.org/x/text v0.21.0 // indirect
 	google.golang.org/appengine v1.6.7 // indirect
