@@ -82,6 +82,10 @@ func main() {
 	discord.AddHandler(func(discord *discordgo.Session, ready *discordgo.Ready) {
 		servers := discord.State.Guilds
 		log.Printf("PaintBot has started on %d servers\n", len(servers))
+		// Log each connected guild ID.
+		for _, server := range servers {
+			log.Printf("Connected to server: %s (ID: %s)\n", server.Name, server.ID)
+		}
 	})
 
 	log.Println(getSubscriptions("enabled"))
@@ -327,7 +331,7 @@ func postNotification(channel *streamInfo) {
 				ID:      channelID.MessageID,
 				Channel: channelID.ChannelID,
 				Content: &message.Content,
-				Embeds:  message.Embeds,
+				Embeds:  &message.Embeds,
 			}
 			msg, err = discord.ChannelMessageEditComplex(messageEdit)
 		} else {
